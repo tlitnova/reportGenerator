@@ -1,0 +1,267 @@
+# =============================================================================
+# Client -> vendor ID mapping for the monthly report pipeline.
+# One entry per client. `sources:` controls which collectors run and which
+# report sections appear for that client — set to `false` (not just blank)
+# for anything that doesn't apply, so a collector can skip cleanly instead
+# of erroring or leaving a stray "not available" gap.
+#
+# Where to find each ID:
+#   autotask.company_id       Autotask > CRM > Companies > open the company ->
+#                              the ID is in the URL (?CompanyID=xxxxx).
+#   ninjaone.organization_id  NinjaOne > Administration > Organizations, or
+#                              GET /v2/organizations and match by name.
+#   sophos.tenant_id          Sophos Central Partner dashboard > Customers ->
+#                              open the tenant; also returned by the Partner
+#                              API's tenant list. data_region_url comes back
+#                              from that same call (varies by tenant's region).
+#   sophos.has_xdr_or_mdr     Whether this client's Email Security includes
+#                              an XDR or MDR add-on — determines whether the
+#                              Email collector can use the Message History
+#                              API or must fall back to the mailbox collector.
+#                              Check Sophos Central > My Products for the
+#                              client's licensed products.
+#   datto_saas_protection.saas_customer_id
+#                              Datto Partner Portal > SaaS Protection > open
+#                              the organization; ID is in the URL, or returned
+#                              by GET /v1/saas/domains.
+#   datto_bcdr.device_serials Datto Partner Portal > BCDR Status; serial number
+#                              is shown per device. A client can have more than
+#                              one appliance — list all that belong to them.
+#   addigy.policy_id           Addigy > Policies > select the client's policy
+#                              (MSPs typically run one policy tree per client)
+#                              -> ID is in the URL.
+#   ninjaone_saas_backup.organization_id
+#                              NinjaOne SaaS Backup (Dropsuite) Partner Portal
+#                              > Organizations. Confirm exact API field name
+#                              once you're in — docs are a partner-portal PDF.
+#   ninjaone.detailed_patch_compliance
+#                              Optional, default false. When true, the NinjaOne
+#                              collector pulls full OS+3rd-party Installed/
+#                              Approved/Pending/Failed patch detail (4 extra
+#                              API calls per device) instead of the cheaper
+#                              default (Installed/Failed only, from one
+#                              endpoint). Turn on for clients who need that
+#                              level of detail (e.g. a compliance cycle like
+#                              CMMC) — leave off otherwise to keep larger
+#                              clients' collector runs fast.
+#   sentinelone.site_id        SentinelOne console > Settings > Sites -> click
+#                              the client's site -> Site Info shows the Site
+#                              ID. Or GET /web/api/v2.1/sites with an
+#                              Account-scoped token returns every site's id
+#                              and name in one call.
+# =============================================================================
+
+clients:
+
+  - name: "Brock-Norton"
+    slug: brock-norton
+    sources:
+      autotask: true
+      ninjaone: true
+      sophos_endpoint: true
+      sophos_email: true
+      sophos_phish_threat: true
+      datto_saas_protection: false
+      datto_bcdr: false
+      addigy: false
+      ninjaone_saas_backup: false
+      sentinelone: false
+    autotask:
+      company_id: 363
+    ninjaone:
+      organization_id: 5
+    sophos:
+      tenant_id: f3e17881-e09d-4632-bb0e-27836342bb20
+      data_region_url: https://api-us01.central.sophos.com
+      has_xdr_or_mdr: false
+    datto_saas_protection:
+      saas_customer_id:
+    datto_bcdr:
+      device_serials: []
+    addigy:
+      policy_id:
+    ninjaone_saas_backup:
+      organization_id:
+
+  - name: "Activate Research"
+    slug: client-2
+    sources:
+      autotask: true
+      ninjaone: true
+      sophos_endpoint: true
+      sophos_email: true
+      sophos_phish_threat: true
+      datto_saas_protection: false
+      datto_bcdr: false
+      addigy: false
+      ninjaone_saas_backup: false
+      sentinelone: false
+    autotask:
+      company_id: 360
+    ninjaone:
+      organization_id: 11
+    sophos:
+      tenant_id: 9b04dc89-dc7a-4805-8b2c-01f8d3aa1378
+      data_region_url: https://api-us01.central.sophos.com
+      has_xdr_or_mdr: false
+
+  - name: "CBDG-AE"
+    slug: client-6
+    sources:
+      autotask: true
+      ninjaone: true
+      sophos_endpoint: true
+      sophos_email: true
+      sophos_phish_threat: false
+      datto_saas_protection: true   # confirmed via CBDG-AE's own Datto/Backupify M365 backup page
+      datto_bcdr: false
+      addigy: false
+      ninjaone_saas_backup: false
+      sentinelone: false
+    autotask:
+      company_id: 439
+    ninjaone:
+      organization_id: 22
+      detailed_patch_compliance: true   # CBDG-AE is in a CMMC compliance cycle and asked for
+                                         # full OS+3rd-party Installed/Approved/Pending/Failed
+                                         # detail — this costs 4 extra API calls per device,
+                                         # so it's opt-in per client rather than the default.
+    sophos:
+      tenant_id: 6031a2f9-db30-4fce-9e48-3ef1ad99338f
+      data_region_url: https://api-us01.central.sophos.com
+      has_xdr_or_mdr: false
+    datto_saas_protection:
+      saas_customer_id: 465384
+
+  - name: "Design & Production"
+    slug: client-3
+    sources:
+      autotask: true
+      ninjaone: true
+      sophos_endpoint: true
+      sophos_email: true
+      sophos_phish_threat: true
+      datto_saas_protection: true
+      datto_bcdr: true
+      addigy: true
+      ninjaone_saas_backup: false
+      sentinelone: false
+    autotask:
+      company_id: 356
+    ninjaone:
+      organization_id: 7
+    sophos:
+      tenant_id: 49583804-ce7c-4e73-82c6-acbb67ce6d4f
+      data_region_url: https://api-us01.central.sophos.com
+      has_xdr_or_mdr: false
+    datto_saas_protection:
+      saas_customer_id: 340596
+    datto_bcdr:
+      device_serials: [84160C297646]
+    addigy:
+      policy_id: c3ececea-c541-4516-9000-a5ebb3e199d3
+
+  - name: "HCN"
+    slug: client-5
+    sources:
+      autotask: true
+      ninjaone: true
+      sophos_endpoint: true
+      sophos_email: true
+      sophos_phish_threat: true
+      datto_saas_protection: true
+      datto_bcdr: false
+      addigy: true
+      ninjaone_saas_backup: false
+      sentinelone: false
+    autotask:
+      company_id: 371
+    ninjaone:
+      organization_id: 8
+    sophos:
+      tenant_id: e52205b8-b299-4af3-a55b-055f64abf4f6
+      data_region_url: https://api-us01.central.sophos.com
+      has_xdr_or_mdr: false
+    datto_saas_protection:
+      saas_customer_id: 394884
+    addigy:
+      policy_id: 072b9d43-3449-4119-8bcd-d7db3e163608
+
+  - name: "Just Neighbors"
+    slug: client-7
+    sources:
+      autotask: true
+      ninjaone: true
+      sophos_endpoint: true
+      sophos_email: true
+      sophos_phish_threat: true
+      datto_saas_protection: true
+      datto_bcdr: false
+      addigy: false
+      ninjaone_saas_backup: false
+      sentinelone: false
+    autotask:
+      company_id: 437
+    ninjaone:
+      organization_id: 21
+    sophos:
+      tenant_id: 2a9d2422-8842-4a8e-b338-bc2d700e35d9
+      data_region_url: https://api-us03.central.sophos.com
+      has_xdr_or_mdr: false
+    datto_saas_protection:
+      saas_customer_id: 474144
+
+  - name: "Main Event Caterers"
+    slug: client-8
+    sources:
+      autotask: true
+      ninjaone: true
+      sophos_endpoint: true
+      sophos_email: true
+      sophos_phish_threat: true
+      datto_saas_protection: true
+      datto_bcdr: false
+      addigy: true
+      ninjaone_saas_backup: false
+      sentinelone: true
+    autotask:
+      company_id: 438
+    ninjaone:
+      organization_id: 20
+    sophos:
+      tenant_id: 5880f9d3-9d1a-4c56-a5fe-4b9d41f51ae5
+      data_region_url: https://api-us01.central.sophos.com
+      has_xdr_or_mdr: false
+    datto_saas_protection:
+      saas_customer_id: 452736
+    addigy:
+      policy_id: 9e23d5ac-9630-4972-8868-7910137027ec
+    sentinelone:
+      site_id:   # TODO: sources.sentinelone is now true — needs the Site ID
+                 # from SentinelOne Settings > Sites, or GET /web/api/v2.1/sites
+
+  - name: "Middleburg Properties"
+    slug: client-4
+    sources:
+      autotask: true
+      ninjaone: true
+      sophos_endpoint: true
+      sophos_email: true
+      sophos_phish_threat: true
+      datto_saas_protection: false
+      datto_bcdr: false
+      addigy: true
+      ninjaone_saas_backup: true
+      sentinelone: false
+    autotask:
+      company_id: 316
+    ninjaone:
+      organization_id: 12
+    sophos:
+      tenant_id: 92230288-6e29-443d-b57a-86d84c62b66c
+      data_region_url: https://api-us03.central.sophos.com
+      has_xdr_or_mdr: false
+    addigy:
+      policy_id: 98b0b8f9-ef07-4df7-8eca-9b6c566a313b
+    ninjaone_saas_backup:
+      organization_id: "1788161-14"

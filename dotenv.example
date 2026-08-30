@@ -1,0 +1,113 @@
+# =============================================================================
+# Monthly Client Report — credentials & settings
+# Copy to .env and fill in. Never commit .env. Never paste real values from
+# this file into a chat with Claude or anyone else — Claude reads .env
+# locally and never needs the actual secrets typed into the conversation.
+# =============================================================================
+
+# --- Report run -------------------------------------------------------------
+REPORT_MONTH=                     # YYYY-MM; leave blank = previous calendar month
+REPORT_TIMEZONE=America/New_York
+MSP_NAME="Northline IT"           # TODO: sample report shows "TeamLogic IT" branding — update to match
+MSP_ACCOUNT_MANAGER="Craig"       # TODO: placeholder from the original template — confirm/replace
+OUTPUT_DIR=./output               # one PDF per client lands here
+CLIENT_MAP=./clients.yaml         # maps each client to its per-vendor IDs
+
+# --- Autotask (Datto) REST API ----------------------------------------------
+# Create an API user in Autotask: Admin > Resources (Users) > New API User.
+# The zone URL comes from https://webservices.autotask.net/atservicesrest/v1.0/zoneInformation?user=<username>
+AUTOTASK_USERNAME=api-user@yourmsp.com
+AUTOTASK_SECRET=
+AUTOTASK_INTEGRATION_CODE=        # "Tracking identifier" — Autotask assigns one per integration vendor; use the generic one for custom
+AUTOTASK_ZONE_URL=https://webservices5.autotask.net/atservicesrest/v1.0
+
+# --- NinjaOne public API (v2) -----------------------------------------------
+# Admin > Apps > API > Add: type "API Services (machine-to-machine)", scopes: monitoring, management
+NINJA_INSTANCE=app.ninjarmm.com   # or eu.ninjarmm.com / ca.ninjarmm.com / oc.ninjarmm.com
+NINJA_CLIENT_ID=
+NINJA_CLIENT_SECRET=
+NINJA_SCOPES="monitoring management"
+
+# --- Sophos Central API -----------------------------------------------------
+# Sophos Central Admin (or Partner dashboard) > Global Settings > API Credentials Management.
+# Use a PARTNER credential — one credential covers every tenant via X-Tenant-ID per call.
+SOPHOS_CLIENT_ID=
+SOPHOS_CLIENT_SECRET=
+SOPHOS_ACCOUNT_TYPE=partner       # partner | organization | tenant
+SOPHOS_AUTH_URL=https://id.sophos.com/api/v2/oauth2/token
+SOPHOS_WHOAMI_URL=https://api.central.sophos.com/whoami/v1
+SOPHOS_TENANTS_URL=https://api.central.sophos.com/partner/v1/tenants
+# Per-tenant ID + data-region URL are returned by the Partner API and stored in clients.yaml
+
+# --- Sophos Email & Phish Threat via scheduled-report emails ----------------
+# No usable reporting API for Email Security without an XDR/MDR add-on (per client,
+# see clients.yaml sophos.has_xdr_or_mdr). No API at all exists for Phish Threat —
+# scheduled CSV reports to a dedicated mailbox is the only path for both.
+REPORT_MAILBOX_PROVIDER=m365      # m365 | gmail | imap
+REPORT_MAILBOX_ADDRESS=reports@yourmsp.com
+REPORT_MAILBOX_FOLDER="Vendor Reports"
+# m365 (Microsoft Graph app registration — Mail.Read, application permission)
+M365_TENANT_ID=
+M365_CLIENT_ID=
+M365_CLIENT_SECRET=
+# imap fallback
+IMAP_HOST=
+IMAP_PORT=993
+IMAP_USERNAME=
+IMAP_PASSWORD=
+
+# --- Datto SaaS Protection (M365 / Google Workspace backup) -----------------
+# Datto Partner Portal > Admin > Integrations > API Keys tab > Create API Key.
+# Uses HTTP Basic Auth (public key = username, secret key = password), not OAuth.
+# Exact base URL is shown in the Partner Portal's own Documentation/Swagger link
+# next to your generated keys — copy it from there rather than guessing it here.
+DATTO_SAAS_PROTECTION_PUBLIC_KEY=
+DATTO_SAAS_PROTECTION_SECRET_KEY=
+DATTO_SAAS_PROTECTION_API_URL=
+
+# --- Datto BCDR (appliance backup: SIRIS / ALTO / NAS) ----------------------
+# Datto Partner Portal > Admin > Integrations > API Keys tab > Create API Key.
+# IMPORTANT: leave the "Organization" field BLANK when creating this key — scoping
+# it to one org breaks discovery of the rest of your fleet.
+# Also uses HTTP Basic Auth (public/secret key pair), separate credential from
+# SaaS Protection above even though both live under the same Partner Portal.
+DATTO_BCDR_PUBLIC_KEY=
+DATTO_BCDR_SECRET_KEY=
+DATTO_BCDR_API_URL=
+
+# --- Addigy (macOS/iOS device management) -----------------------------------
+# Account > Integrations > API & Webhooks > New API Configuration.
+# API v1 was deprecated and removed (March 31, 2026) — this is the only
+# credential needed now. Permission required: "View Devices" only — policy
+# IDs are hand-entered per client in clients.yaml, so no policy-list
+# permission is needed on this credential.
+ADDIGY_ORG_ID=
+ADDIGY_API_SECRET=
+
+# --- NinjaOne SaaS Backup (Dropsuite — email/M365/Google Workspace backup) --
+# NinjaOne SaaS Backup Partner Portal > Settings > API Settings — generates a
+# Reseller Token and Auth Token. Field names to confirm once you're in; docs
+# are a downloadable PDF rather than an interactive spec.
+NINJA_SAAS_BACKUP_RESELLER_TOKEN=
+NINJA_SAAS_BACKUP_AUTH_TOKEN=
+NINJA_SAAS_BACKUP_API_URL=
+
+# --- SentinelOne (endpoint protection, for clients not on Sophos Endpoint) --
+# Console > Settings > Users > Service Users > Create New Service User.
+# IMPORTANT: create this at Account scope with the Viewer role, not scoped to
+# a single Site — a Site-scoped token can't see other clients' data at all.
+SENTINELONE_CONSOLE_URL=https://yourmsp.sentinelone.net
+SENTINELONE_API_TOKEN=
+
+# --- Delivery (optional) ----------------------------------------------------
+# How finished PDFs go out. Leave blank to just write files to OUTPUT_DIR.
+DELIVERY_METHOD=none              # none | email | sharepoint
+DELIVERY_FROM=reports@yourmsp.com
+DELIVERY_BCC=craig@yourmsp.com
+SHAREPOINT_SITE_ID=
+SHAREPOINT_DRIVE_PATH=/Client Reports
+
+# --- Rendering ---------------------------------------------------------------
+PDF_ENGINE=weasyprint             # weasyprint | chromium
+TEMPLATE_PATH=./templates/monthly-report.html
+LOGO_PATH=./assets/logo.png
