@@ -268,14 +268,19 @@ def collect(cfg, client, month_str, verbose=False):
     ]
 
     # protected_count / not_checked_in_count: render_report.py's build_security()
-    # reads these explicit fields (falling back to device_count / 0 if absent).
-    # Every device returned by the endpoint API has Sophos installed by
-    # definition, so "protected" is the full device count, never a fraction
-    # of it — confirmed by client feedback that a prior report wrongly
-    # labeled the not-recently-checked-in population "Unprotected." Not
-    # checked in recently uses the SAME 14-day cutoff as activity_status's
-    # "active" bucket (not the older 30-day stale_30day_count), so this
-    # number and the activity donut below always agree with each other.
+    # and build_kpis() read these explicit fields (falling back to
+    # device_count / 0 if absent). Every device returned by the endpoint API
+    # has Sophos installed by definition (a device with no agent never
+    # appears via this API at all — see activity_status["not_protected"]
+    # above), so "protected_count" is simply every device this endpoint
+    # returned, never a fraction of it — confirmed by client feedback that a
+    # prior report wrongly labeled the not-recently-checked-in population
+    # "Unprotected." not_checked_in_count uses the SAME 14-day cutoff as
+    # activity_status's "active" bucket (not the older 30-day
+    # stale_30day_count), so this number and the activity donut below always
+    # agree with each other, and it must NOT be relabeled "unprotected" when
+    # rendering — these devices do have current endpoint protection, they
+    # just haven't phoned home recently.
     protected_count = len(endpoints)
     not_checked_in_count = activity_status["inactive_2weeks"] + activity_status["inactive_2months"]
 
