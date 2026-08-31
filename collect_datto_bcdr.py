@@ -122,6 +122,12 @@ def collect(cfg, client, verbose=False):
 
             backups = asset.get("backups") or []
             most_recent_status = backups[0].get("backup", {}).get("status") if backups else None
+            # NOTE: this is the size of the most recent backup job, not a
+            # confirmed measure of "space this asset currently occupies on
+            # the appliance's local disk" — those may be close in practice
+            # but aren't verified identical. Named accordingly rather than
+            # implying more precision than we actually have.
+            most_recent_backup_size_bytes = backups[0].get("backup", {}).get("totalUsedStorage") if backups else None
 
             local_stale = False
             offsite_stale = False
@@ -137,6 +143,7 @@ def collect(cfg, client, verbose=False):
                 "last_backup": datetime.fromtimestamp(last_backup_ts, tz=timezone.utc).isoformat() if last_backup_ts else None,
                 "last_offsite_sync": datetime.fromtimestamp(last_offsite_ts, tz=timezone.utc).isoformat() if last_offsite_ts else None,
                 "most_recent_backup_status": most_recent_status,
+                "most_recent_backup_size_bytes": most_recent_backup_size_bytes,
                 "screenshot_verification_ok": screenshot_ok,
                 "is_paused": is_paused,
                 "is_archived": is_archived,

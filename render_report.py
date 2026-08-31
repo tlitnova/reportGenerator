@@ -35,6 +35,7 @@ without weasyprint installed, just skips the PDF conversion step.
 
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -44,8 +45,14 @@ from jinja2 import Environment, FileSystemLoader
 try:
     from weasyprint import HTML as WeasyHTML
     WEASYPRINT_AVAILABLE = True
-except ImportError:
+except Exception as e:
+    # Deliberately broad: a missing/broken native dependency (Pango,
+    # GObject) surfaces as OSError from inside weasyprint's own
+    # module-level code, not a clean ImportError — confirmed against a
+    # real macOS failure. Catching only ImportError let this crash the
+    # whole script before --html-only was even checked.
     WEASYPRINT_AVAILABLE = False
+    _weasyprint_import_error = str(e)
 
 TEMPLATE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_NAME = "monthly-report-template.html"
@@ -61,13 +68,22 @@ def load_config():
     load_dotenv()
     logo_path = os.getenv("LOGO_PATH", "./logo.png")
     logo_abs_path = os.path.abspath(logo_path)
+    logo_found = os.path.exists(logo_abs_path)
+    if logo_found:
+        print(f"[info] logo found at {logo_abs_path}")
+    else:
+        print(
+            f"[warn] LOGO_PATH is set to {logo_path!r}, resolved to {logo_abs_path}, "
+            f"but no file exists there — report will show text branding instead. "
+            f"Check LOGO_PATH in .env and confirm that exact path/filename exists."
+        )
     return {
         "client_map": os.getenv("CLIENT_MAP", "./clients.yaml"),
         "output_dir": os.getenv("OUTPUT_DIR", "./output"),
         "msp_name": os.getenv("MSP_NAME", "TeamLogic IT of Reston & Tysons"),
         # Only used if the file actually exists — a missing logo degrades
         # to plain text in the masthead rather than a broken image.
-        "logo_path": logo_abs_path if os.path.exists(logo_abs_path) else None,
+        "logo_path": logo_abs_path if logo_found else None,
     }
 
 
@@ -105,6 +121,37 @@ def top_n_with_other(counts, n=6):
     return head + [("Other", other_total)]
 
 
+def format_bytes(num_bytes):
+    """Human-readable size for the donut's center label."""
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if num_bytes < 1024:
+            return f"{num_bytes:.1f} {unit}" if unit != "B" else f"{num_bytes} {unit}"
+        num_bytes /= 1024
+    return f"{num_bytes:.1f} PB"
+
+
+def make_donut_segments(counts_list, palette=None, radius=70):
+    """Same SVG stroke-dasharray donut technique already proven in the
+    approved mockup — computed generically here so any section can use a
+    real donut chart from real (label, value) data, not just the one
+    hand-coded example in the mockup."""
+    palette = palette or PALETTE
+    circumference = 2 * math.pi * radius
+    total = sum(v for _, v in counts_list) or 1
+    segments = []
+    offset = 0
+    for (label, value), color in zip(counts_list, palette):
+        pct = value / total
+        dash = pct * circumference
+        segments.append({
+            "label": label, "value": value, "pct": round(pct * 100, 1), "color": color,
+            "dasharray": f"{dash:.2f} {circumference - dash:.2f}",
+            "dashoffset": f"{-offset:.2f}",
+        })
+        offset += dash
+    return segments
+
+
 def make_segments(counts_list, palette=None):
     palette = palette or PALETTE
     total = sum(v for _, v in counts_list) or 1
@@ -132,7 +179,11 @@ def build_autotask(data):
     frm = a.get("first_response_met_pct", 0)
     res = a.get("resolution_met_pct", 0)
     hours = a.get("hours_worked_total", 0)
-    hours_by_category = sorted((a.get("hours_worked_by_category") or {}).items(), key=lambda kv: -kv[1])
+    raw_categories = a.get("hours_worked_by_category") or {}
+    cleaned_categories = {}
+    for cat, hrs in raw_categories.items():
+        cleaned_categories[cat.strip()] = cleaned_categories.get(cat.strip(), 0) + hrs
+    hours_by_category = sorted(cleaned_categories.items(), key=lambda kv: -kv[1])
 
     sla_phrase = (
         "within your service level agreement for first response" if frm >= 90
@@ -247,10 +298,19 @@ def build_security(data):
         return None
 
     stats, prose_parts, sources = [], [], []
+    endpoint_segments, email_threat_segments, activity_donut = None, None, None
 
     if se:
         sources.append("Sophos Endpoint")
-        active, total = se.get("active_count", 0), se.get("device_count", 0)
+        # Use the same 14-day threshold as the activity donut below, not
+        # the older 30-day active_count — confirmed against real data that
+        # showing both side by side is genuinely confusing (a device seen
+        # 20 days ago satisfied the old 30-day rule but correctly fails
+        # the stricter, Sophos-matching 14-day one). One consistent
+        # definition of "active" throughout this section.
+        act = se.get("activity_status")
+        total = se.get("device_count", 0)
+        active = act.get("active", 0) if act else se.get("active_count", 0)
         tamper_off = se.get("tamper_protection_off_count", 0)
         stats.append({"value": f"{active}/{total}", "label": "devices protected", "flag": active < total})
         stats.append({"value": tamper_off, "label": "tamper protection issues", "flag": tamper_off > 0})
@@ -258,6 +318,28 @@ def build_security(data):
             f"{active} of {total} devices have current endpoint protection" if active < total
             else "All active devices have current endpoint protection"
         )
+        # A simple protected/unprotected chart — real signal, not just a
+        # fraction buried in text.
+        if total > 0 and active < total:
+            endpoint_segments = make_segments(
+                [("Protected", active), ("Unprotected", total - active)],
+                palette=["#1F4B3F", "#A9702F"],
+            )
+        # Replicates Sophos's own real "Endpoint Computer Activity Status"
+        # donut (confirmed from an actual console screenshot) — Active /
+        # Inactive 2+ Weeks / Inactive 2+ Months. "Not Protected" is
+        # omitted from the chart itself since it's always 0 by definition
+        # here (see collect_sophos.py's comment on why).
+        if act and sum(act.values()) > 0:
+            activity_counts = [
+                ("Active", act.get("active", 0)),
+                ("Inactive 2+ Weeks", act.get("inactive_2weeks", 0)),
+                ("Inactive 2+ Months", act.get("inactive_2months", 0)),
+            ]
+            activity_counts = [(l, v) for l, v in activity_counts if v > 0]
+            activity_donut = make_donut_segments(activity_counts, palette=["#1F4B3F", "#D8C48A", "#A9702F"])
+        else:
+            activity_donut = None
 
     if s1:
         sources.append("SentinelOne")
@@ -280,8 +362,22 @@ def build_security(data):
         if isinstance(at_risk, list) and at_risk:
             stats.append({"value": len(at_risk), "label": "at-risk users flagged", "flag": True})
 
+        # Real chart from the confirmed 11-category threat breakdown
+        # (Spam, Bulk, Malware, Impersonation, etc.) — this is genuinely
+        # rich data that was being reduced to one flat number before.
+        breakdown = {k: v for k, v in (inbound.get("threat_breakdown") or {}).items() if v > 0}
+        if breakdown:
+            email_threat_segments = make_segments(top_n_with_other(breakdown))
+
     prose = (". ".join(prose_parts) + ".") if prose_parts else "Security monitoring is active across your protected devices."
-    return {"source_label": " & ".join(sources), "stats": stats, "prose": prose}
+    return {
+        "source_label": " & ".join(sources),
+        "stats": stats,
+        "prose": prose,
+        "endpoint_segments": endpoint_segments,
+        "email_threat_segments": email_threat_segments,
+        "activity_donut": activity_donut,
+    }
 
 
 # --------------------------------------------------------- Data Protection
@@ -310,7 +406,20 @@ def build_data_protection(data):
         sources.append("NinjaOne SaaS Backup")
         total_mb, active_mb = saas_backup["total_mailboxes"], saas_backup.get("mailboxes_active", 0)
         gap = saas_backup.get("mailboxes_available_not_backed_up", 0)
-        m365_stats = [{"value": f"{active_mb}/{total_mb}", "label": "mailboxes protected", "flag": gap > 0}]
+        seats_used = saas_backup.get("seats_used")
+
+        m365_stats = []
+        # Lead with seats_used when available — confirmed against the real
+        # Dropsuite dashboard that this is the client-recognizable number
+        # (labeled "Seat used" there, and likely what they're billed on),
+        # not total_mailboxes, which counts everything in the M365 tenant
+        # directory including shared/resource/disabled mailboxes that
+        # aren't necessarily billable seats. Real data showed these two
+        # numbers can differ substantially (319 seats vs. 697 mailboxes)
+        # for the same tenant.
+        if seats_used is not None:
+            m365_stats.append({"value": seats_used, "label": "seats used"})
+        m365_stats.append({"value": f"{active_mb}/{total_mb}", "label": "mailboxes in backup scope", "flag": gap > 0})
         if gap:
             m365_stats.append({"value": gap, "label": "mailboxes not yet backed up", "flag": True})
         added = saas_backup.get("mailboxes_added_this_month", 0)
@@ -333,6 +442,22 @@ def build_data_protection(data):
             "your on-site backup appliance completed every scheduled job" if success_count == len(active_assets)
             else f"{len(active_assets) - success_count} on-site system(s) need attention"
         )
+
+        # Per-system backup size chart. Uses each asset's most recent
+        # backup size — a reasonable real proxy for "how much of your
+        # appliance's protected data belongs to this system," though not
+        # a confirmed measure of current appliance disk usage specifically
+        # (see the honest caveat in collect_datto_bcdr.py).
+        sized_assets = [
+            (a.get("asset_name", "Unknown"), a["most_recent_backup_size_bytes"])
+            for a in active_assets if a.get("most_recent_backup_size_bytes")
+        ]
+        if sized_assets:
+            sized_assets.sort(key=lambda kv: -kv[1])
+            top = top_n_with_other(dict(sized_assets))
+            bcdr_block["storage_donut"] = make_donut_segments(top)
+            total_bytes = sum(v for _, v in sized_assets)
+            bcdr_block["storage_total_label"] = format_bytes(total_bytes)
 
     prose = " and ".join(prose_parts)
     prose = (prose[0].upper() + prose[1:] + ".") if prose else ""
@@ -472,8 +597,8 @@ def main():
             print(f"Wrote {pdf_path}")
         else:
             print(
-                "[note] weasyprint isn't installed — HTML was still written above. "
-                "Run 'pip3 install weasyprint' for PDF output, then re-run without --html-only."
+                "[note] weasyprint isn't usable in this environment — HTML was still written above. "
+                f"Real error: {_weasyprint_import_error}"
             )
 
 

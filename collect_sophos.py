@@ -38,6 +38,14 @@ from dotenv import load_dotenv
 # replicating each vendor's own slightly different internal cutoffs.
 STALE_DAYS = 30
 
+# Matches Sophos's own "Endpoint Computer Activity Status" donut, confirmed
+# from a real console screenshot (Active / Inactive 2+ Weeks / Inactive
+# 2+ Months / Not Protected). Kept separate from STALE_DAYS above, which
+# drives the needs_attention watchlist — this is purely for replicating
+# that specific chart's real category boundaries.
+TWO_WEEKS_DAYS = 14
+TWO_MONTHS_DAYS = 60
+
 ENDPOINT_PAGE_SIZE = 500
 ALERTS_PAGE_SIZE = 500
 
@@ -155,6 +163,8 @@ def collect(cfg, client, month_str, verbose=False):
     month_start, month_end = month_range_utc(month_str, cfg["timezone"])
     now = datetime.now(timezone.utc)
     stale_cutoff = now - timedelta(days=STALE_DAYS)
+    two_weeks_cutoff = now - timedelta(days=TWO_WEEKS_DAYS)
+    two_months_cutoff = now - timedelta(days=TWO_MONTHS_DAYS)
 
     # --- Endpoint health ---
     endpoints = sophos.get_paginated("/endpoint/v1/endpoints", page_size=ENDPOINT_PAGE_SIZE)
@@ -168,6 +178,12 @@ def collect(cfg, client, month_str, verbose=False):
     tamper_off_devices = []
     unhealthy_devices = []
     attention_reasons = {}
+    # Two-tier buckets matching Sophos's own console chart exactly.
+    # "not_protected" is always 0 here by definition — a device with no
+    # Sophos agent at all would never appear in this endpoint list to
+    # begin with, so we have no way to see devices that aren't reporting
+    # at all (a real limitation, not a computed zero).
+    activity_status = {"active": 0, "inactive_2weeks": 0, "inactive_2months": 0, "not_protected": 0}
 
     for ep in endpoints:
         hostname = ep.get("hostname") or ep.get("id", "unknown-device")
@@ -175,6 +191,13 @@ def collect(cfg, client, month_str, verbose=False):
         is_stale = last_seen is not None and last_seen < stale_cutoff
         tamper_off = ep.get("tamperProtectionEnabled") is False
         health = (ep.get("health") or {}).get("overall")
+
+        if last_seen is None or last_seen >= two_weeks_cutoff:
+            activity_status["active"] += 1
+        elif last_seen >= two_months_cutoff:
+            activity_status["inactive_2weeks"] += 1
+        else:
+            activity_status["inactive_2months"] += 1
 
         if is_stale:
             stale_devices.append(hostname)
@@ -235,6 +258,7 @@ def collect(cfg, client, month_str, verbose=False):
             "month": month_str,
             "device_count": len(endpoints),
             "active_count": active_count,
+            "activity_status": activity_status,
             "stale_30day_count": len(stale_devices),
             "stale_30day_devices": stale_devices,
             "tamper_protection_off_count": len(tamper_off_devices),
