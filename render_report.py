@@ -293,12 +293,11 @@ def build_addigy(data):
 def build_security(data):
     se = data.get("sophos_endpoint")
     s1 = data.get("sentinelone")
-    email = data.get("sophos_email")
-    if not (se or s1 or email):
+    if not (se or s1):
         return None
 
     stats, prose_parts, sources = [], [], []
-    endpoint_segments, email_threat_segments, activity_donut = None, None, None
+    activity_donut = None
 
     if se:
         sources.append("Sophos Endpoint")
@@ -309,27 +308,29 @@ def build_security(data):
         # the stricter, Sophos-matching 14-day one). One consistent
         # definition of "active" throughout this section.
         act = se.get("activity_status")
-        total = se.get("device_count", 0)
         active = act.get("active", 0) if act else se.get("active_count", 0)
+        # protected_count / not_checked_in_count come straight from
+        # collect_sophos.py's own explicit fields — every device returned
+        # by the endpoint API has Sophos installed by definition, so
+        # "protected" is the full device count, never a fraction of it.
+        # A device that hasn't checked in recently is NOT the same as an
+        # unprotected one; confirmed by client feedback that a prior
+        # report wrongly labeled this population "Unprotected."
+        total_protected = se.get("protected_count", se.get("device_count", 0))
+        not_checked_in = se.get("not_checked_in_count", 0)
         tamper_off = se.get("tamper_protection_off_count", 0)
-        stats.append({"value": f"{active}/{total}", "label": "devices protected", "flag": active < total})
+        stats.append({"value": total_protected, "label": "devices protected"})
+        stats.append({"value": not_checked_in, "label": "not checked in recently", "flag": not_checked_in > 0})
         stats.append({"value": tamper_off, "label": "tamper protection issues", "flag": tamper_off > 0})
         prose_parts.append(
-            f"{active} of {total} devices have current endpoint protection" if active < total
-            else "All active devices have current endpoint protection"
+            f"{not_checked_in} device{'s' if not_checked_in != 1 else ''} haven't checked in recently and may need a look"
+            if not_checked_in else "Every protected device has checked in recently"
         )
-        # A simple protected/unprotected chart — real signal, not just a
-        # fraction buried in text.
-        if total > 0 and active < total:
-            endpoint_segments = make_segments(
-                [("Protected", active), ("Unprotected", total - active)],
-                palette=["#1F4B3F", "#A9702F"],
-            )
         # Replicates Sophos's own real "Endpoint Computer Activity Status"
         # donut (confirmed from an actual console screenshot) — Active /
-        # Inactive 2+ Weeks / Inactive 2+ Months. "Not Protected" is
-        # omitted from the chart itself since it's always 0 by definition
-        # here (see collect_sophos.py's comment on why).
+        # Inactive 2+ Weeks / Inactive 2+ Months. This chart alone (not a
+        # separate Protected/Unprotected chart) is the correct visual for
+        # this breakdown, since every device shown here IS protected.
         if act and sum(act.values()) > 0:
             activity_counts = [
                 ("Active", act.get("active", 0)),
@@ -338,8 +339,6 @@ def build_security(data):
             ]
             activity_counts = [(l, v) for l, v in activity_counts if v > 0]
             activity_donut = make_donut_segments(activity_counts, palette=["#1F4B3F", "#D8C48A", "#A9702F"])
-        else:
-            activity_donut = None
 
     if s1:
         sources.append("SentinelOne")
@@ -351,32 +350,73 @@ def build_security(data):
         if threats:
             prose_parts.append(f"{threats} threat detection{'s' if threats != 1 else ''} this month")
 
-    if email:
-        sources.append("Sophos Email")
-        inbound = email.get("inbound") or {}
-        scanned = inbound.get("emails_scanned", 0)
-        threats_blocked = inbound.get("total_potential_threats", 0)
-        stats.append({"value": scanned, "label": "inbound emails scanned"})
-        stats.append({"value": threats_blocked, "label": "threats blocked"})
-        at_risk = email.get("at_risk_users")
-        if isinstance(at_risk, list) and at_risk:
-            stats.append({"value": len(at_risk), "label": "at-risk users flagged", "flag": True})
-
-        # Real chart from the confirmed 11-category threat breakdown
-        # (Spam, Bulk, Malware, Impersonation, etc.) — this is genuinely
-        # rich data that was being reduced to one flat number before.
-        breakdown = {k: v for k, v in (inbound.get("threat_breakdown") or {}).items() if v > 0}
-        if breakdown:
-            email_threat_segments = make_segments(top_n_with_other(breakdown))
-
     prose = (". ".join(prose_parts) + ".") if prose_parts else "Security monitoring is active across your protected devices."
     return {
         "source_label": " & ".join(sources),
         "stats": stats,
         "prose": prose,
-        "endpoint_segments": endpoint_segments,
-        "email_threat_segments": email_threat_segments,
         "activity_donut": activity_donut,
+    }
+
+
+# ----------------------------------------------------------- Sophos Email
+def build_sophos_email(data):
+    """Standalone Sophos Email section, split out from endpoint/device
+    security per client feedback that the two were being conflated into
+    one generic 'Security' block. Mirrors the layout of the client's own
+    Sophos Email Dashboard Summary Report (confirmed against a real
+    Middleburg Communities PDF): Inbound/Outbound stats, an Intelix Threat
+    Summary donut, and a real At Risk Users table."""
+    email = data.get("sophos_email")
+    if not email:
+        return None
+
+    inbound = email.get("inbound") or {}
+    outbound = email.get("outbound") or {}
+
+    def direction_block(d, label):
+        scanned = d.get("emails_scanned", 0)
+        threats = d.get("total_potential_threats", 0)
+        stats = [
+            {"value": scanned, "label": f"{label} emails scanned"},
+            {"value": threats, "label": f"{label} threats identified", "flag": threats > 0},
+        ]
+        mailboxes = d.get("mailboxes_protected")
+        if mailboxes:
+            stats.append({"value": mailboxes, "label": "mailboxes protected"})
+        breakdown = {k: v for k, v in (d.get("threat_breakdown") or {}).items() if v > 0}
+        segments = make_segments(top_n_with_other(breakdown)) if breakdown else None
+        return {"stats": stats, "segments": segments}
+
+    inbound_block = direction_block(inbound, "inbound") if inbound else None
+    outbound_block = direction_block(outbound, "outbound") if outbound else None
+
+    intelix = email.get("intelix") or {}
+    intelix_block = None
+    if intelix.get("total_analyzed"):
+        breakdown = {k: v for k, v in (intelix.get("breakdown") or {}).items() if v > 0}
+        intelix_block = {
+            "total_analyzed": intelix["total_analyzed"],
+            "segments": make_donut_segments(list(breakdown.items())) if breakdown else None,
+        }
+
+    at_risk = email.get("at_risk_users")
+    at_risk_users = at_risk if isinstance(at_risk, list) else []
+
+    threats_blocked = inbound.get("total_potential_threats", 0) + outbound.get("total_potential_threats", 0)
+    prose_parts = []
+    if threats_blocked:
+        prose_parts.append(f"{threats_blocked} potential threat{'s' if threats_blocked != 1 else ''} blocked across inbound and outbound mail")
+    if at_risk_users:
+        prose_parts.append(f"{len(at_risk_users)} user{'s' if len(at_risk_users) != 1 else ''} flagged as at-risk this month")
+    prose = ". ".join(prose_parts) + "." if prose_parts else "Email security monitoring is active."
+
+    return {
+        "prose": prose,
+        "inbound": inbound_block,
+        "outbound": outbound_block,
+        "intelix": intelix_block,
+        "at_risk_users": at_risk_users,
     }
 
 
@@ -557,6 +597,7 @@ def build_context(data, client, cfg, month_str):
         "ninjaone": build_ninjaone(data),
         "addigy": build_addigy(data),
         "security": build_security(data),
+        "sophos_email": build_sophos_email(data),
         "data_protection": build_data_protection(data),
         "what_we_did": build_what_we_did(data),
         "recommended_next": build_recommended_next(watchlist),

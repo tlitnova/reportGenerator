@@ -253,11 +253,25 @@ def collect(cfg, client, month_str, verbose=False):
         for name, reasons in attention_reasons.items()
     ]
 
+    # Explicit, unambiguous summary counts for the report's top stat bar.
+    # Every device in `endpoints` has the Sophos agent installed by
+    # definition (a device with no agent at all never appears via this API
+    # in the first place — see activity_status["not_protected"] above), so
+    # "protected_count" is simply every device this endpoint returned.
+    # "not_checked_in_count" is the same 38+178=216-style figure the
+    # console's own activity donut shows as Inactive 2+ Weeks/Months —
+    # it must NOT be relabeled "unprotected" when rendering, since these
+    # devices do have current endpoint protection, they just haven't
+    # phoned home recently.
+    not_checked_in_count = activity_status["inactive_2weeks"] + activity_status["inactive_2months"]
+
     return {
         "sophos_endpoint": {
             "month": month_str,
             "device_count": len(endpoints),
             "active_count": active_count,
+            "protected_count": len(endpoints),
+            "not_checked_in_count": not_checked_in_count,
             "activity_status": activity_status,
             "stale_30day_count": len(stale_devices),
             "stale_30day_devices": stale_devices,
