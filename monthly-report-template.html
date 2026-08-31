@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monthly Technology Report — {{ client_name }}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1B2420;
+    --paper: #F6F4EC;
+    --forest: #1F4B3F;
+    --sage: #6B8F7B;
+    --ochre: #A9702F;
+    --rule: #DAD6C8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', sans-serif;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 760px; margin: 0 auto; padding: 64px 24px 96px; }
+  h1, h2, h3 { font-family: 'Fraunces', serif; font-weight: 500; margin: 0; color: var(--forest); }
+
+  .masthead {
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 2px solid var(--forest); padding-bottom: 20px; margin-bottom: 8px;
+  }
+  .masthead .brand { font-size: 14px; font-weight: 600; letter-spacing: 0.02em; color: var(--forest); }
+  .masthead .brand img { height: 48px; width: auto; display: block; }
+  .masthead .period { font-size: 14px; color: var(--sage); }
+  .client-name { font-size: 34px; margin-top: 18px; font-weight: 500; }
+  .report-title { font-size: 16px; color: var(--sage); font-family: 'IBM Plex Sans', sans-serif; margin-top: 4px; }
+
+  .headline {
+    font-family: 'Fraunces', serif; font-size: 21px; font-weight: 400;
+    line-height: 1.55; color: var(--ink); margin: 40px 0 44px; max-width: 62ch;
+  }
+
+  .kpi-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px 20px;
+    padding: 28px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    margin-bottom: 56px;
+  }
+  .kpi .value { font-family: 'Fraunces', serif; font-size: 32px; font-weight: 500; color: var(--forest); line-height: 1; }
+  .kpi .value.flag { color: var(--ochre); }
+  .kpi .label { font-size: 13px; color: var(--ink); opacity: 0.7; margin-top: 6px; }
+
+  .section { margin-bottom: 52px; }
+  .section-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
+  .section-header h2 { font-size: 22px; }
+  .section-source { font-size: 12px; color: var(--sage); white-space: nowrap; }
+  .section p { margin: 0 0 16px; max-width: 68ch; }
+
+  .stat-row { display: flex; gap: 40px; margin: 20px 0; flex-wrap: wrap; }
+  .stat-row .stat .num { font-size: 24px; font-weight: 600; font-family: 'IBM Plex Sans', sans-serif; }
+  .stat-row .stat .num.flag { color: var(--ochre); }
+  .stat-row .stat .cap { font-size: 13px; opacity: 0.65; }
+
+  .device-mix-bar, .version-bar, .compliance-bar {
+    display: flex; height: 10px; border-radius: 2px; overflow: hidden; margin: 10px 0 8px;
+  }
+  .device-mix-bar span, .version-bar span, .compliance-bar span { display: block; height: 100%; }
+
+  .compliance-legend { display: flex; gap: 18px; font-size: 12px; opacity: 0.75; flex-wrap: wrap; margin-bottom: 4px; }
+  .compliance-legend .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 5px; position: relative; top: -1px;
+  }
+
+  .subhead { font-size: 14px; font-family: 'IBM Plex Sans', sans-serif; font-weight: 600; color: var(--forest); margin: 28px 0 12px; }
+
+  table.plain { width: 100%; border-collapse: collapse; font-size: 14px; margin: 18px 0; }
+  table.plain th { text-align: left; font-weight: 600; padding: 8px 0; border-bottom: 1px solid var(--ink); }
+  table.plain td { padding: 9px 0; border-bottom: 1px solid var(--rule); }
+  table.plain td.num, table.plain th.num { text-align: right; }
+
+  table.app-protection { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  table.app-protection td { padding: 7px 0; font-size: 14px; vertical-align: middle; }
+  .app-name { width: 100px; }
+  .app-bar-cell { padding-right: 16px !important; }
+  .app-bar { background: var(--rule); height: 8px; border-radius: 2px; overflow: hidden; }
+  .app-bar span { display: block; height: 100%; background: var(--forest); }
+  .app-ratio { width: 60px; text-align: right; font-weight: 600; white-space: nowrap; }
+
+  .storage-donut-row { display: flex; align-items: center; gap: 32px; margin: 12px 0 4px; flex-wrap: wrap; }
+  .donut-legend { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  .donut-legend li { padding: 5px 0; }
+  .donut-legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; }
+
+  .watchlist { list-style: none; margin: 0; padding: 0; }
+  .watchlist li {
+    padding: 10px 0; border-bottom: 1px solid var(--rule); font-size: 14px;
+    display: flex; justify-content: space-between; gap: 16px;
+  }
+  .watchlist li .device { font-weight: 600; }
+  .watchlist li .reason { color: var(--ochre); text-align: right; }
+
+  .close-section { background: #FFFFFF; border: 1px solid var(--rule); border-radius: 4px; padding: 32px; margin-top: 8px; }
+  .close-section h2 { font-size: 20px; margin-bottom: 20px; }
+  .close-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+  .close-cols h3 { font-size: 14px; font-family: 'IBM Plex Sans', sans-serif; font-weight: 600; color: var(--ink); margin-bottom: 10px; }
+  .close-cols ul { margin: 0; padding-left: 18px; font-size: 14px; }
+  .close-cols li { margin-bottom: 8px; }
+
+  .footer {
+    margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--rule);
+    font-size: 13px; color: var(--ink); opacity: 0.6; display: flex; justify-content: space-between;
+  }
+
+  @media (max-width: 600px) {
+    .kpi-strip { grid-template-columns: repeat(2, 1fr); }
+    .close-cols { grid-template-columns: 1fr; }
+    .client-name { font-size: 27px; }
+    .storage-donut-row { flex-direction: column; align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="masthead">
+    <div class="brand">
+      {% if logo_path %}<img src="{{ logo_path }}" alt="{{ msp_name }}">{% else %}{{ msp_name }}{% endif %}
+    </div>
+    <div class="period">{{ report_period_label }}</div>
+  </div>
+  <div class="client-name">{{ client_name }}</div>
+  <div class="report-title">Monthly Technology Report</div>
+
+  <p class="headline">{{ headline }}</p>
+
+  <div class="kpi-strip">
+    {% for kpi in kpis %}
+    <div class="kpi">
+      <div class="value{% if kpi.flag %} flag{% endif %}">{{ kpi.value }}</div>
+      <div class="label">{{ kpi.label }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if autotask %}
+  <div class="section">
+    <div class="section-header"><h2>Service Desk</h2><span class="section-source">Autotask</span></div>
+    <p>{{ autotask.prose }}</p>
+    <div class="stat-row">
+      <div class="stat"><div class="num">{{ autotask.tickets_resolved }}</div><div class="cap">tickets resolved</div></div>
+      <div class="stat"><div class="num">{{ autotask.hours_worked_total }}</div><div class="cap">hours worked</div></div>
+      <div class="stat"><div class="num">{{ autotask.first_response_met_pct }}%</div><div class="cap">first response met</div></div>
+      <div class="stat"><div class="num">{{ autotask.resolution_met_pct }}%</div><div class="cap">resolution met</div></div>
+    </div>
+    {% if autotask.hours_by_category %}
+    <table class="plain">
+      <tr><th>Category</th><th class="num">Hours</th></tr>
+      {% for cat, hours in autotask.hours_by_category %}
+      <tr><td>{{ cat }}</td><td class="num">{{ hours }}</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if ninjaone %}
+  <div class="section">
+    <div class="section-header"><h2>Devices &amp; Patching</h2><span class="section-source">NinjaOne</span></div>
+    <p>{{ ninjaone.prose }}</p>
+    {% if ninjaone.compliance_segments %}
+    <div class="compliance-bar">
+      {% for seg in ninjaone.compliance_segments %}<span style="width:{{ seg.pct }}%; background:{{ seg.color }};"></span>{% endfor %}
+    </div>
+    <div class="compliance-legend">
+      {% for seg in ninjaone.compliance_segments %}<span><i class="dot" style="background:{{ seg.color }}"></i>{{ seg.label }} {{ seg.pct }}%</span>{% endfor %}
+    </div>
+    {% else %}
+    <div class="stat-row">
+      <div class="stat"><div class="num">{{ ninjaone.installed }}</div><div class="cap">patches installed this month</div></div>
+      {% if ninjaone.failed %}<div class="stat"><div class="num flag">{{ ninjaone.failed }}</div><div class="cap">patches failed</div></div>{% endif %}
+    </div>
+    {% endif %}
+    {% if ninjaone.os_segments %}
+    <h3 class="subhead">Windows versions</h3>
+    <div class="version-bar">
+      {% for seg in ninjaone.os_segments %}<span style="width:{{ seg.pct }}%; background:{{ seg.color }};"></span>{% endfor %}
+    </div>
+    <div class="compliance-legend">
+      {% for seg in ninjaone.os_segments %}<span><i class="dot" style="background:{{ seg.color }}"></i>{{ seg.label }} — {{ seg.value }}</span>{% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if addigy %}
+  <div class="section">
+    <div class="section-header"><h2>Apple Devices</h2><span class="section-source">Addigy</span></div>
+    <p>{{ addigy.prose }}</p>
+    {% if addigy.device_mix_segments %}
+    <div class="device-mix-bar">
+      {% for seg in addigy.device_mix_segments %}<span style="width:{{ seg.pct }}%; background:{{ seg.color }};"></span>{% endfor %}
+    </div>
+    <div class="compliance-legend">
+      {% for seg in addigy.device_mix_segments %}<span><i class="dot" style="background:{{ seg.color }}"></i>{{ seg.label }} — {{ seg.value }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% if addigy.stats %}
+    <div class="stat-row" style="margin-top:16px;">
+      {% for stat in addigy.stats %}
+      <div class="stat"><div class="num{% if stat.flag %} flag{% endif %}">{{ stat.value }}</div><div class="cap">{{ stat.label }}</div></div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if addigy.os_segments %}
+    <h3 class="subhead">macOS versions</h3>
+    <div class="version-bar">
+      {% for seg in addigy.os_segments %}<span style="width:{{ seg.pct }}%; background:{{ seg.color }};"></span>{% endfor %}
+    </div>
+    <div class="compliance-legend">
+      {% for seg in addigy.os_segments %}<span><i class="dot" style="background:{{ seg.color }}"></i>{{ seg.label }} — {{ seg.value }}</span>{% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if security %}
+  <div class="section">
+    <div class="section-header"><h2>Security</h2><span class="section-source">{{ security.source_label }}</span></div>
+    <p>{{ security.prose }}</p>
+    <div class="stat-row">
+      {% for stat in security.stats %}
+      <div class="stat"><div class="num{% if stat.flag %} flag{% endif %}">{{ stat.value }}</div><div class="cap">{{ stat.label }}</div></div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if data_protection %}
+  <div class="section">
+    <div class="section-header"><h2>Data Protection</h2><span class="section-source">{{ data_protection.source_label }}</span></div>
+    <p>{{ data_protection.prose }}</p>
+
+    {% if data_protection.m365 %}
+    <h3 class="subhead">Microsoft 365 backup</h3>
+    <div class="stat-row">
+      {% for stat in data_protection.m365.stats %}
+      <div class="stat"><div class="num{% if stat.flag %} flag{% endif %}">{{ stat.value }}</div><div class="cap">{{ stat.label }}</div></div>
+      {% endfor %}
+    </div>
+    {% if data_protection.m365.app_rows %}
+    <table class="app-protection">
+      {% for row in data_protection.m365.app_rows %}
+      <tr>
+        <td class="app-name">{{ row.name }}</td>
+        <td class="app-bar-cell"><div class="app-bar"><span style="width:{{ row.pct }}%"></span></div></td>
+        <td class="app-ratio">{{ row.ratio }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    {% endif %}
+
+    {% if data_protection.bcdr %}
+    <h3 class="subhead">On-site backup appliance</h3>
+    <div class="stat-row">
+      {% for stat in data_protection.bcdr.stats %}
+      <div class="stat"><div class="num{% if stat.flag %} flag{% endif %}">{{ stat.value }}</div><div class="cap">{{ stat.label }}</div></div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="close-section">
+    <h2>This month &amp; next</h2>
+    <div class="close-cols">
+      <div>
+        <h3>What we did</h3>
+        <ul>{% for item in what_we_did %}<li>{{ item }}</li>{% endfor %}</ul>
+      </div>
+      <div>
+        <h3>Recommended next month</h3>
+        {% if recommended_next %}
+        <ul>{% for item in recommended_next %}<li>{{ item }}</li>{% endfor %}</ul>
+        {% else %}
+        <p style="font-size:14px; margin:0;">Nothing outstanding — everything's in good shape.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span>{{ msp_name }}</span>
+    <span>Prepared for {{ client_name }}</span>
+  </div>
+
+</div>
+</body>
+</html>

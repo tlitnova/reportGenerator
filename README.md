@@ -37,9 +37,9 @@ SentinelOne.
 | `collect_datto_saas.py` | M365/Google Workspace backup status (seats, backup %) | ✅ Done, verified against real data |
 | `collect_datto_bcdr.py` | Appliance + per-agent backup status (local/offsite, screenshot verification) | ✅ Done, verified against real data |
 | `collect_addigy.py` | macOS/iOS device compliance, encryption, staleness | ✅ Done, verified against real data |
-| `collect_mailbox.py` | Scans a shared mailbox for Sophos Email + Phish Threat report PDFs, matches to clients, parses them | ✅ Parsers verified against real PDFs; **blocked** on the actual scheduled email arriving (see below) |
-| `collect_ninjaone_saas_backup.py` | Dropsuite email/SaaS backup status | ❌ Not started |
-| `collect_sentinelone.py` | Endpoint protection for clients not on Sophos Endpoint | ❌ Not started |
+| `collect_mailbox.py` | Scans a shared mailbox for Sophos Email + Phish Threat report PDFs, matches to clients, parses them | ✅ Done, verified against 5 real client reports |
+| `collect_ninjaone_saas_backup.py` | Dropsuite email/SaaS backup status: seats, storage, mailbox coverage, added-this-month | ✅ Done, verified against real data |
+| `collect_sentinelone.py` | Endpoint protection (agent staleness, infected devices, monthly threat detections) for clients not on Sophos Endpoint | ✅ Done, verified against real data |
 | `render_report.py` | Turns each client's collected JSON into the final PDF | ❌ Not started |
 | `run_monthly.py` | Orchestrates all collectors + render for every client | ❌ Not started |
 
@@ -63,12 +63,19 @@ while debugging, not as its normal mode.
 - **Sophos Phish Threat has no scheduled-report feature at all** — someone
   has to manually export the CSV/PDF from the Campaigns page each month.
   There's no way to automate this away; `collect_mailbox.py` can only parse
-  what lands in the mailbox, not cause it to be sent.
-- **Sophos Email's scheduled report is currently being sent as a PDF**
-  (not CSV) to a placeholder address while the real setup is pending —
-  `collect_mailbox.py`'s PDF parser was built and verified against a real
-  sample, but the actual automated monthly delivery hasn't been confirmed
-  end-to-end yet.
+  what lands in the mailbox, not cause it to be sent. Confirmed none of the
+  5 real reports received so far are Phish Threat exports — Email only.
+- **Sophos Email's scheduled report delivery has a real quirk**: Sophos
+  can't send these directly to the destination M365 mailbox reliably, so
+  the working setup routes through an intermediate Gmail address that then
+  forwards to `craig@teamlogicnova.com` / "Monthly Reports". Confirmed
+  working end-to-end for 5 clients (Activate Research, HCN, Just
+  Neighbors, Main Event Caterers, Middleburg) as of the first real batch.
+- **Activate Research's Sophos Email report only covers 1 day**
+  (`date_range` showed Aug 31 → Sep 1), while the other 4 clients' reports
+  correctly covered a full month (Aug 2 → Sep 1). Likely that client's
+  report schedule in Sophos Central is set to a daily window instead of
+  monthly — worth checking/fixing there, not a collector bug.
 - **Sophos alerts (`collect_sophos.py`) are best-effort.** Confirmed against
   real data that `/common/v1/alerts` does not surface everything visible in
   Sophos's own "Recent threat graphs" console widget. Treat a low/zero
@@ -111,6 +118,40 @@ while debugging, not as its normal mode.
   request more via `desired_fact_identifiers`. The policy filter must be
   nested under `query.filters` — a flatter, differently-documented shape
   silently returns every device instead of erroring.
+- **SentinelOne**: auth is `Authorization: ApiToken <token>` (not Bearer),
+  base URL is your own tenant subdomain (not a shared host), and pagination
+  is cursor-based (`pagination.nextCursor`), not page numbers. Like
+  NinjaOne's `offline` flag, `isActive` is a live instant-in-time snapshot
+  — a real device showed `isActive: false` with a `lastActiveDate` of the
+  same day, confirming it's not a reliable staleness signal on its own;
+  `lastActiveDate` age is the one that matters.
+- **NinjaOne SaaS Backup (Dropsuite)**: the real REST API spec is a PDF
+  ("REST API for Sub-reseller ver 1.0.0") not indexed publicly — worth
+  asking the client/vendor for directly rather than guessing. Three
+  confirmed non-obvious things: (1) auth headers are exactly
+  `X-Reseller-Token` and `X-Access-Token`, not the more common
+  `Authorization`/`Bearer` pattern; (2) `GET /users/{id}` (subscription
+  summary) works with the reseller-wide **admin** token, but
+  `/tenants` and `/accounts` need a **different, per-organization**
+  token — solved without any manual portal hunting by calling
+  `GET /users` (works with the admin token) and reading the target
+  org's own `authentication_token` straight out of that response; (3)
+  `tenant_id` belongs in the URL **path** (`/tenants/{tenant_id}/accounts`),
+  not as a query parameter — the parameter table's wording was
+  ambiguous, but the spec's own example `next_url`/`prev_url` values
+  showed the real, correct structure once looked at closely.
+- **`collect_mailbox.py` (Sophos Email PDFs)**: classification is
+  content-based (checking the PDF's own text for markers like "inbound
+  summary"), not filename/subject-based — real filenames like
+  `ARMEmail.pdf` carry no useful signal. Client matching works off the
+  PDF's `Company Name` field when present; when it isn't (Phish Threat
+  reports), falls back to matching a single word from the client's name
+  against the campaign name. PDF text extraction can wrap a long email
+  address mid-word across a line break (confirmed real example:
+  `leshaundra.cordier@hcnglobal.co` + newline + `m`) — the at-risk-users
+  parser handles this with a token-stream approach rather than per-line
+  regex, joining any non-numeric token before the three trailing number
+  columns into one email.
 
 ## Ground rules
 
@@ -122,13 +163,14 @@ while debugging, not as its normal mode.
 
 ## Getting started on a new machine
 
-Name the project folder `reportGenerator` for consistency:
+The repo is live at `https://github.com/tlitnova/reportGenerator` (private).
+Clone it rather than starting from scratch:
 ```bash
-mkdir reportGenerator && cd reportGenerator
-# copy in clients.yaml, dotenv.example, Research Findings.md, .gitignore,
-# and every collect_*.py file
-cp dotenv.example .env   # then fill in real credentials — never commit this
-git init
-git add .
-git commit -m "Initial commit"
+git clone https://github.com/tlitnova/reportGenerator.git
+cd reportGenerator
+cp dotenv.example .env   # then fill in real credentials — never commit this,
+                          # and .env won't come down with the clone since
+                          # it's git-ignored — copy your real one over
+                          # from wherever it's already sitting, or fill
+                          # in from scratch
 ```

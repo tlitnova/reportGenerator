@@ -242,9 +242,29 @@ def sum_matching_columns(rows, keyword_groups, verbose=False):
     return results
 
 
-def extract_pdf_pages(content_bytes):
+def extract_pdf_pages(content_bytes, verbose=False):
+    """Sophos email exports are commonly password-restricted PDFs by
+    default (owner-locked, not requiring a password to open) — pypdf can
+    silently return empty text from these instead of raising a clear
+    error. Attempt an empty-password decrypt first, since that's the
+    standard way to unlock text extraction on this kind of restricted
+    (not truly user-password-protected) PDF."""
     reader = PdfReader(io.BytesIO(content_bytes))
-    return [p.extract_text() or "" for p in reader.pages]
+    if reader.is_encrypted:
+        try:
+            reader.decrypt("")
+            if verbose:
+                print("[debug] PDF was encrypted/restricted — decrypted with empty password")
+        except Exception as e:
+            if verbose:
+                print(f"[debug] PDF is encrypted and empty-password decrypt failed: {e}")
+    pages = [p.extract_text() or "" for p in reader.pages]
+    if verbose:
+        total_chars = sum(len(p) for p in pages)
+        print(f"[debug] extracted {len(pages)} page(s), {total_chars} total characters")
+        if total_chars == 0:
+            print("[debug] extraction produced NO text at all — likely still encrypted, or a scanned/image-only PDF")
+    return pages
 
 
 def parse_sophos_email_pdf(pages, verbose=False):
@@ -427,7 +447,7 @@ def collect(cfg, clients, month_str, only_client_slug=None, verbose=False):
             extra_match_text = ""
 
             if is_pdf:
-                parsed_pdf_pages = extract_pdf_pages(content_bytes)
+                parsed_pdf_pages = extract_pdf_pages(content_bytes, verbose=verbose)
                 full_text_lower = "\n".join(parsed_pdf_pages).lower()
                 # Content-based classification, confirmed necessary against
                 # real data: filenames alone (e.g. "PhishThreatSummary_...")
@@ -437,6 +457,9 @@ def collect(cfg, clients, month_str, only_client_slug=None, verbose=False):
                     report_type = "sophos_email"
                 elif any(k in full_text_lower for k in PDF_PHISH_MARKERS):
                     report_type = "sophos_phish_threat"
+                if verbose and report_type is None:
+                    print(f"[debug] classification failed for {filename} — first 500 chars of extracted text:")
+                    print(f"[debug]   {full_text_lower[:500]!r}")
             else:
                 report_type = classify_report(msg["subject"], filename)
 

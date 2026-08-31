@@ -1,0 +1,14 @@
+# Secrets — never commit, even to a private repo
+.env
+
+# Generated report output (one PDF/JSON per client per month)
+output/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS cruft
+.DS_Store
