@@ -23,6 +23,8 @@ from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
+import re
+
 import requests
 import yaml
 from dotenv import load_dotenv
@@ -273,6 +275,18 @@ def collect(cfg, client, month_str):
     }
 
 
+def resolve_month(candidate):
+    """Only accepts a strict YYYY-MM string; anything else (None, empty, or
+    a malformed value like a stray comment fragment from a .env parser that
+    doesn't strip trailing comments) is treated as unset — confirmed to
+    happen with REPORT_MONTH's default template value, since python-dotenv
+    keeps everything after '=' (including a trailing '# comment') as the
+    literal value when it isn't quoted."""
+    if candidate and re.fullmatch(r"\d{4}-\d{2}", candidate.strip()):
+        return candidate.strip()
+    return None
+
+
 def default_month():
     """Previous calendar month, in YYYY-MM."""
     first_of_this_month = datetime.today().replace(day=1)
@@ -296,7 +310,7 @@ def main():
         print(f"[skip] {client['name']}: sources.autotask is false — nothing to collect.")
         return
 
-    month_str = args.month or os.getenv("REPORT_MONTH") or default_month()
+    month_str = resolve_month(args.month) or resolve_month(os.getenv("REPORT_MONTH")) or default_month()
 
     print(f"Collecting Autotask data for {client['name']} ({month_str})...")
     result = collect(cfg, client, month_str)

@@ -6,7 +6,13 @@
 # =============================================================================
 
 # --- Report run -------------------------------------------------------------
-REPORT_MONTH=                     # YYYY-MM; leave blank = previous calendar month
+# REPORT_MONTH: YYYY-MM; leave blank to default to the previous calendar
+# month. Keep this comment on its own line above the variable, not inline
+# after it — python-dotenv does not strip trailing inline comments, so
+# "REPORT_MONTH=   # comment" sets REPORT_MONTH to the literal comment text
+# instead of leaving it blank (confirmed to crash collect_mailbox.py and
+# every other collector that doesn't guard against it with resolve_month()).
+REPORT_MONTH=
 REPORT_TIMEZONE=America/New_York
 MSP_NAME="Northline IT"           # TODO: sample report shows "TeamLogic IT" branding — update to match
 MSP_ACCOUNT_MANAGER="Craig"       # TODO: placeholder from the original template — confirm/replace

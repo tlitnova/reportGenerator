@@ -114,6 +114,19 @@ def default_month():
     return (first_of_this_month - timedelta(days=1)).strftime("%Y-%m")
 
 
+def resolve_month(candidate):
+    """Only accepts a strict YYYY-MM string; anything else (None, empty, or
+    a malformed value like a stray comment fragment from a .env parser that
+    doesn't strip trailing comments) is treated as unset. Matches the same
+    guard already used in collect_ninjaone_saas_backup.py — confirmed to
+    happen with REPORT_MONTH's default template value, since python-dotenv
+    keeps everything after '=' (including a trailing '# comment') as the
+    literal value when it isn't quoted."""
+    if candidate and re.fullmatch(r"\d{4}-\d{2}", candidate.strip()):
+        return candidate.strip()
+    return None
+
+
 class GraphClient:
     def __init__(self, cfg):
         self.token = self._get_token(cfg)
@@ -267,6 +280,72 @@ def extract_pdf_pages(content_bytes, verbose=False):
     return pages
 
 
+def parse_at_risk_users(section_text, verbose=False):
+    """Confirmed working against a real Middleburg Communities Sophos Email
+    Dashboard Summary Report PDF. Row format seen there:
+        swierenga@livemiddleburg.com 21 0 21
+    (email, risk index, impersonation emails, risky URLs clicked) all on one
+    line — but per the wrapped-email gotcha already confirmed elsewhere in
+    this file (an email split mid-word across a line break, e.g.
+    "...hcnglobal.co" + "m"), a token-stream approach is used here too
+    rather than a per-line regex, in case some client's data wraps the same
+    way. Any run of non-numeric tokens is treated as (part of) an email
+    address and joined with no separator; once three numeric tokens are
+    seen in a row, that closes out one user's row."""
+    if "no risky users" in section_text.lower():
+        return "none"
+
+    m = re.search(r"URLS clicked\s*\n(.*)", section_text, re.S)
+    tail = m.group(1) if m else section_text
+
+    users = []
+    email_parts, nums = [], []
+    for tok in tail.split():
+        if re.fullmatch(r"\d+", tok):
+            nums.append(int(tok))
+            if len(nums) == 3 and email_parts:
+                users.append({
+                    "email": "".join(email_parts),
+                    "risk_index": nums[0],
+                    "impersonations": nums[1],
+                    "risky_clicks": nums[2],
+                })
+                email_parts, nums = [], []
+        else:
+            # A stray non-numeric token before a row closed out means the
+            # previous partial row was malformed (shouldn't happen on real
+            # data) — drop it rather than mis-attribute numbers to the
+            # wrong user.
+            if nums:
+                email_parts, nums = [], []
+            email_parts.append(tok)
+
+    if verbose:
+        print(f"[debug] parsed {len(users)} at-risk user(s): {users}")
+    return users if users else "SEE_RAW_TEXT_UNCONFIRMED_FORMAT"
+
+
+def parse_intelix_threat_summary(section_text):
+    """Confirmed working against a real Middleburg Communities report.
+    Section has a top-line total/malicious count plus a six-row verdict
+    breakdown table ending in its own 'Total' line."""
+    out = {}
+    m = re.search(r"Total emails analyzed\s*\n?\s*(\d+)", section_text)
+    out["total_analyzed"] = int(m.group(1)) if m else None
+    m = re.search(r"Malicious Emails\s*\n?\s*(\d+)", section_text)
+    out["malicious_emails"] = int(m.group(1)) if m else None
+
+    breakdown = {}
+    table_match = re.search(r"Verdict Number of Emails\n(.*?)\nTotal\s+\d+", section_text, re.S)
+    if table_match:
+        for line in table_match.group(1).strip().split("\n"):
+            row = re.match(r"^(.+?)\s+(\d+)$", line.strip())
+            if row:
+                breakdown[row.group(1)] = int(row.group(2))
+    out["breakdown"] = breakdown
+    return out
+
+
 def parse_sophos_email_pdf(pages, verbose=False):
     """Confirmed working against a real Brock-Norton Sophos Email Dashboard
     Summary Report PDF. One important gotcha: page 1's own "Includes" list
@@ -322,12 +401,10 @@ def parse_sophos_email_pdf(pages, verbose=False):
     }
 
     at_risk = section_page("AT RISK USERS SUMMARY")
-    # NOTE: only the "no risky users" case has been seen against real data.
-    # A populated at-risk-users table's exact layout is unconfirmed — this
-    # falls back to a marker string rather than guessing a table format.
-    out["at_risk_users"] = "none" if "no risky users" in at_risk.lower() else "SEE_RAW_TEXT_UNCONFIRMED_FORMAT"
-    if verbose and out["at_risk_users"] != "none":
-        print(f"[debug] at-risk-users section had unexpected content, needs a real example to parse: {at_risk[:500]}")
+    out["at_risk_users"] = parse_at_risk_users(at_risk, verbose=verbose)
+
+    intelix = section_page("INTELIX THREAT SUMMARY")
+    out["intelix"] = parse_intelix_threat_summary(intelix)
 
     tls = section_page("TLS ENCRYPTION SUMMARY")
     tls_data = {}
@@ -521,7 +598,7 @@ def main():
 
     cfg = load_config()
     clients = load_clients(cfg["client_map"])
-    month_str = args.month or os.getenv("REPORT_MONTH") or default_month()
+    month_str = resolve_month(args.month) or resolve_month(os.getenv("REPORT_MONTH")) or default_month()
 
     print(f"Scanning mailbox {cfg['mailbox']} / {cfg['folder_name']} for {month_str}...")
     results_by_client, unmatched = collect(cfg, clients, month_str, only_client_slug=args.client, verbose=args.verbose)

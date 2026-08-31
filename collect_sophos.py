@@ -27,6 +27,8 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
+import re
+
 import requests
 import yaml
 from dotenv import load_dotenv
@@ -95,6 +97,18 @@ def month_range_utc(month_str, tz_name):
     start_local = datetime(year, month, 1, tzinfo=tz)
     end_local = datetime(year + 1, 1, 1, tzinfo=tz) if month == 12 else datetime(year, month + 1, 1, tzinfo=tz)
     return start_local.astimezone(ZoneInfo("UTC")), end_local.astimezone(ZoneInfo("UTC"))
+
+
+def resolve_month(candidate):
+    """Only accepts a strict YYYY-MM string; anything else (None, empty, or
+    a malformed value like a stray comment fragment from a .env parser that
+    doesn't strip trailing comments) is treated as unset — confirmed to
+    happen with REPORT_MONTH's default template value, since python-dotenv
+    keeps everything after '=' (including a trailing '# comment') as the
+    literal value when it isn't quoted."""
+    if candidate and re.fullmatch(r"\d{4}-\d{2}", candidate.strip()):
+        return candidate.strip()
+    return None
 
 
 def default_month():
@@ -253,10 +267,24 @@ def collect(cfg, client, month_str, verbose=False):
         for name, reasons in attention_reasons.items()
     ]
 
+    # protected_count / not_checked_in_count: render_report.py's build_security()
+    # reads these explicit fields (falling back to device_count / 0 if absent).
+    # Every device returned by the endpoint API has Sophos installed by
+    # definition, so "protected" is the full device count, never a fraction
+    # of it — confirmed by client feedback that a prior report wrongly
+    # labeled the not-recently-checked-in population "Unprotected." Not
+    # checked in recently uses the SAME 14-day cutoff as activity_status's
+    # "active" bucket (not the older 30-day stale_30day_count), so this
+    # number and the activity donut below always agree with each other.
+    protected_count = len(endpoints)
+    not_checked_in_count = activity_status["inactive_2weeks"] + activity_status["inactive_2months"]
+
     return {
         "sophos_endpoint": {
             "month": month_str,
             "device_count": len(endpoints),
+            "protected_count": protected_count,
+            "not_checked_in_count": not_checked_in_count,
             "active_count": active_count,
             "activity_status": activity_status,
             "stale_30day_count": len(stale_devices),
@@ -297,7 +325,7 @@ def main():
         print(f"[skip] {client['name']}: sources.sophos_endpoint is false — nothing to collect.")
         return
 
-    month_str = args.month or os.getenv("REPORT_MONTH") or default_month()
+    month_str = resolve_month(args.month) or resolve_month(os.getenv("REPORT_MONTH")) or default_month()
 
     print(f"Collecting Sophos Endpoint data for {client['name']} ({month_str})...")
     result = collect(cfg, client, month_str, verbose=args.verbose)

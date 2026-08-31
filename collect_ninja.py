@@ -33,6 +33,8 @@ import concurrent.futures
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import re
+
 import requests
 import yaml
 from dotenv import load_dotenv
@@ -89,6 +91,18 @@ def month_range_utc(month_str, tz_name):
     start_local = datetime(year, month, 1, tzinfo=tz)
     end_local = datetime(year + 1, 1, 1, tzinfo=tz) if month == 12 else datetime(year, month + 1, 1, tzinfo=tz)
     return start_local.astimezone(ZoneInfo("UTC")).timestamp(), end_local.astimezone(ZoneInfo("UTC")).timestamp()
+
+
+def resolve_month(candidate):
+    """Only accepts a strict YYYY-MM string; anything else (None, empty, or
+    a malformed value like a stray comment fragment from a .env parser that
+    doesn't strip trailing comments) is treated as unset — confirmed to
+    happen with REPORT_MONTH's default template value, since python-dotenv
+    keeps everything after '=' (including a trailing '# comment') as the
+    literal value when it isn't quoted."""
+    if candidate and re.fullmatch(r"\d{4}-\d{2}", candidate.strip()):
+        return candidate.strip()
+    return None
 
 
 def default_month():
@@ -403,7 +417,7 @@ def main():
         print(f"[skip] {client['name']}: sources.ninjaone is false — nothing to collect.")
         return
 
-    month_str = args.month or os.getenv("REPORT_MONTH") or default_month()
+    month_str = resolve_month(args.month) or resolve_month(os.getenv("REPORT_MONTH")) or default_month()
 
     print(f"Collecting NinjaOne data for {client['name']}...")
     result = collect(cfg, client, month_str, verbose=args.verbose)
