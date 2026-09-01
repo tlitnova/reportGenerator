@@ -31,8 +31,9 @@
     display: flex; justify-content: space-between; align-items: center;
     border-bottom: 2px solid var(--forest); padding-bottom: 20px; margin-bottom: 8px;
   }
-  .masthead .brand { font-size: 14px; font-weight: 600; letter-spacing: 0.02em; color: var(--forest); }
+  .masthead .brand { font-size: 14px; font-weight: 600; letter-spacing: 0.02em; color: var(--forest); display: flex; align-items: center; gap: 10px; }
   .masthead .brand img { height: 48px; width: auto; display: block; }
+  .masthead .brand .name { font-size: 13px; }
   .masthead .period { font-size: 14px; color: var(--sage); }
   .client-name { font-size: 34px; margin-top: 18px; font-weight: 500; }
   .report-title { font-size: 16px; color: var(--sage); font-family: 'IBM Plex Sans', sans-serif; margin-top: 4px; }
@@ -137,7 +138,7 @@
 
   <div class="masthead">
     <div class="brand">
-      {% if logo_path %}<img src="{{ logo_path }}" alt="{{ msp_name }}">{% else %}{{ msp_name }}{% endif %}
+      {% if logo_path %}<img src="{{ logo_path }}" alt="{{ msp_name }}"><span class="name">{{ msp_name }}</span>{% else %}{{ msp_name }}{% endif %}
     </div>
     <div class="period">{{ report_period_label }}</div>
   </div>

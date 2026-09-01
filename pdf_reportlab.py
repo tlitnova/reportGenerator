@@ -56,6 +56,7 @@ CONTENT_WIDTH = LETTER[0] - 2 * PAGE_MARGIN
 def _styles() -> dict:
     return {
         "brand": ParagraphStyle("brand", fontName="Helvetica-Bold", fontSize=10, textColor=FOREST, leading=12),
+        "brand_caption": ParagraphStyle("brand_caption", fontName="Helvetica-Bold", fontSize=10, textColor=FOREST, leading=12),
         "period": ParagraphStyle("period", fontName="Helvetica", fontSize=10, textColor=SAGE, leading=12, alignment=2),
         "client_name": ParagraphStyle("client_name", fontName="Times-Bold", fontSize=25, textColor=INK, leading=29, spaceBefore=12),
         "report_title": ParagraphStyle("report_title", fontName="Helvetica", fontSize=12, textColor=SAGE, leading=15, spaceAfter=16),
@@ -257,23 +258,34 @@ def _section_header(title, source_label, styles):
 
 
 def _masthead_brand_flowable(ctx, styles):
-    """Logo image when LOGO_PATH resolved to a real file (see
-    render_report.load_config), else plain MSP-name text — same fallback
-    rule as the HTML template's {% if logo_path %}. Previously this was
-    ALWAYS text-only: ctx['logo_path'] was populated but never read here,
-    so the masthead never showed the logo in the PDF even though the HTML
-    version did."""
+    """Logo image *plus* the MSP name text next to it, falling back to
+    text-only when there's no logo file. Previously, once the logo started
+    rendering, the MSP name text disappeared entirely from the header
+    (image-or-text, never both) — this restores the name alongside the
+    logo so the business name is always visible in the masthead, matching
+    the footer which has always shown it."""
     logo_path = ctx.get("logo_path")
+    msp_name = ctx.get("msp_name") or ""
     if logo_path and os.path.exists(logo_path):
         target_height = 34  # points — matches the HTML masthead's 48px (~36pt) logo height
         try:
             reader = ImageReader(logo_path)
             iw, ih = reader.getSize()
             width = target_height * (iw / ih) if ih else target_height
-            return Image(logo_path, width=width, height=target_height)
+            img = Image(logo_path, width=width, height=target_height)
+            name = Paragraph(msp_name, styles["brand_caption"])
+            row = Table([[img, name]], colWidths=[width + 10, None])
+            row.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]))
+            return row
         except Exception:
             pass  # fall through to text branding if the image can't be read
-    return Paragraph(ctx.get("msp_name") or "", styles["brand"])
+    return Paragraph(msp_name, styles["brand"])
 
 
 def _build_masthead(ctx, styles):
@@ -559,6 +571,15 @@ def _build_data_protection(dp, styles):
 
 
 def _build_close_section(what_we_did, recommended_next, styles):
+    """The 'This month & next' box. `outer`'s single column is
+    CONTENT_WIDTH - 40 wide, and its own 20pt L/R padding eats 40pt of
+    that, so the nested two-column `body` table must fit within
+    CONTENT_WIDTH - 80 pt, not CONTENT_WIDTH - 24. The previous col_w of
+    (CONTENT_WIDTH - 24) / 2 made `body` ~56pt wider than the space
+    inside `outer`'s cell, which reportlab does not shrink to fit — the
+    right column's text was wrapped to a width wide enough to spill past
+    `outer`'s own right border, so long wrapped lines visibly crossed the
+    box's vertical rule (the 'box lines cross the text' bug)."""
     left = [Paragraph("What we did", styles["close_h3"])]
     for item in (what_we_did or []):
         left.append(Paragraph(f"\u2022 {item}", styles["close_li"]))
@@ -568,16 +589,19 @@ def _build_close_section(what_we_did, recommended_next, styles):
             right.append(Paragraph(f"\u2022 {item}", styles["close_li"]))
     else:
         right.append(Paragraph("Nothing outstanding \u2014 everything's in good shape.", styles["close_empty"]))
-    col_w = (CONTENT_WIDTH - 24) / 2
+    outer_padding = 20  # matches outer's own LEFTPADDING/RIGHTPADDING below
+    available = (CONTENT_WIDTH - 40) - 2 * outer_padding
+    gap = 24
+    col_w = (available - gap) / 2
     body = Table([[left, right]], colWidths=[col_w, col_w])
-    _cell_pad(body, right=24)
+    _cell_pad(body, right=gap)
     outer = Table([[Paragraph("This month & next", styles["close_h2"])], [body]], colWidths=[CONTENT_WIDTH - 40])
     outer.setStyle(TableStyle([
         ("BOX", (0, 0), (-1, -1), 0.75, RULE),
-        ("TOPPADDING", (0, 0), (-1, -1), 20),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 20),
-        ("LEFTPADDING", (0, 0), (-1, -1), 20),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 20),
+        ("TOPPADDING", (0, 0), (-1, -1), outer_padding),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), outer_padding),
+        ("LEFTPADDING", (0, 0), (-1, -1), outer_padding),
+        ("RIGHTPADDING", (0, 0), (-1, -1), outer_padding),
         ("BACKGROUND", (0, 0), (-1, -1), HexColor("#FFFFFF")),
     ]))
     return outer
