@@ -116,4 +116,4 @@ SHAREPOINT_DRIVE_PATH=/Client Reports
 # --- Rendering ---------------------------------------------------------------
 PDF_ENGINE=weasyprint             # weasyprint | chromium
 TEMPLATE_PATH=./templates/monthly-report.html
-LOGO_PATH=./assets/logo.png
+LOGO_PATH=./img/logo.png

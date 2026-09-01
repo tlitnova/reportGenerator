@@ -199,12 +199,28 @@ def collect(cfg, client, month_str, verbose=False):
     # at all (a real limitation, not a computed zero).
     activity_status = {"active": 0, "inactive_2weeks": 0, "inactive_2months": 0, "not_protected": 0}
 
+    # Sophos Central doesn't purge old agent records on re-image/re-enroll,
+    # so the SAME hostname can legitimately map to multiple distinct
+    # endpoint records (confirmed against real HCN data: "Ana Sarai
+    # MacBook Pro" and "LeShaundra's MacBook Pro" each had 4-5 separate
+    # stale/unhealthy records). attention_reasons is keyed by hostname and
+    # dedupes reason *categories* per hostname (using the worst/most-recent
+    # figure within each category) rather than concatenating one raw phrase
+    # per duplicate record — the old behavior produced unreadable run-on
+    # strings like "no contact in 106 days, ..., no contact in 96 days, ...".
+    attention_max_days_silent = {}
+    attention_tamper_off = set()
+    attention_unhealthy_statuses = {}
+    attention_duplicate_count = {}
+
     for ep in endpoints:
         hostname = ep.get("hostname") or ep.get("id", "unknown-device")
         last_seen = parse_iso8601(ep.get("lastSeenAt"))
         is_stale = last_seen is not None and last_seen < stale_cutoff
         tamper_off = ep.get("tamperProtectionEnabled") is False
         health = (ep.get("health") or {}).get("overall")
+
+        attention_duplicate_count[hostname] = attention_duplicate_count.get(hostname, 0) + 1
 
         if last_seen is None or last_seen >= two_weeks_cutoff:
             activity_status["active"] += 1
@@ -216,17 +232,34 @@ def collect(cfg, client, month_str, verbose=False):
         if is_stale:
             stale_devices.append(hostname)
             days_silent = (now - last_seen).days
-            attention_reasons.setdefault(hostname, []).append(f"no contact in {days_silent} days")
+            attention_max_days_silent[hostname] = max(attention_max_days_silent.get(hostname, 0), days_silent)
         else:
             active_count += 1
 
         if tamper_off:
             tamper_off_devices.append(hostname)
-            attention_reasons.setdefault(hostname, []).append("tamper protection disabled")
+            attention_tamper_off.add(hostname)
 
         if health and health.lower() not in ("good", "green"):
             unhealthy_devices.append(hostname)
-            attention_reasons.setdefault(hostname, []).append(f"health status: {health}")
+            attention_unhealthy_statuses.setdefault(hostname, set()).add(health)
+
+    # Build one clean, deduplicated reason string per hostname.
+    all_flagged_hostnames = (
+        set(attention_max_days_silent) | attention_tamper_off | set(attention_unhealthy_statuses)
+    )
+    for hostname in all_flagged_hostnames:
+        parts = []
+        dup_count = attention_duplicate_count.get(hostname, 1)
+        record_note = f" (across {dup_count} device records at this name)" if dup_count > 1 else ""
+        if hostname in attention_max_days_silent:
+            parts.append(f"no contact in {attention_max_days_silent[hostname]} days{record_note}")
+        if hostname in attention_tamper_off:
+            parts.append("tamper protection disabled")
+        if hostname in attention_unhealthy_statuses:
+            statuses = ", ".join(sorted(attention_unhealthy_statuses[hostname]))
+            parts.append(f"health status: {statuses}")
+        attention_reasons[hostname] = parts
 
     # --- Alerts, scoped to the report month ---
     all_alerts = sophos.get_paginated("/common/v1/alerts", page_size=ALERTS_PAGE_SIZE)

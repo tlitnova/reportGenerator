@@ -52,6 +52,31 @@ ACTIVE_FLEET_DAYS = 180
 # candidates and reports via --verbose which one (if any) actually has data.
 DEVICE_TYPE_FACT_CANDIDATES = ["hardware_model", "device_model_name", "product_name"]
 
+# macOS major releases in chronological order (name -> version number varies:
+# sequential through Sequoia, then Apple switched to year-based numbering
+# starting with Tahoe in 2025 — 15 -> 26, not 16). Ranked by release order so
+# "N versions behind" is correct across that jump. Update this list yearly as
+# new majors ship (confirmed current as of Sept 2026: Tahoe is the newest
+# shipped release; Golden Gate (27) is in beta and not yet the deployed base).
+MACOS_MAJOR_RELEASE_ORDER = [11, 12, 13, 14, 15, 26, 27]
+CURRENT_MACOS_MAJOR = 26  # Tahoe — bump to 27 once Golden Gate actually ships
+OUTDATED_OS_VERSIONS_BEHIND_THRESHOLD = 2  # flag anything MORE than this many majors behind
+
+
+def macos_versions_behind(mac_os_x_version):
+    """Returns how many major releases behind CURRENT_MACOS_MAJOR a given
+    mac_os_x_version string (e.g. '14.5.1') is, or None if unparseable/not
+    a recognized major."""
+    if not mac_os_x_version:
+        return None
+    try:
+        major = int(str(mac_os_x_version).split(".")[0])
+    except (ValueError, IndexError):
+        return None
+    if major not in MACOS_MAJOR_RELEASE_ORDER or CURRENT_MACOS_MAJOR not in MACOS_MAJOR_RELEASE_ORDER:
+        return None
+    return MACOS_MAJOR_RELEASE_ORDER.index(CURRENT_MACOS_MAJOR) - MACOS_MAJOR_RELEASE_ORDER.index(major)
+
 
 def load_config():
     load_dotenv()
@@ -80,75 +105,99 @@ def _facts_list(base_facts_wanted):
     return base_facts_wanted + DEVICE_TYPE_FACT_CANDIDATES
 
 
-def _filter_actually_worked(items, policy_id):
-    """Checks a returned device's own policy_ids fact to confirm the filter
-    genuinely took effect — confirmed necessary against real data: a 200
-    response with a plausible-looking device list was observed even when
-    the filter was completely ignored (same 189-device total for two
-    different policy IDs)."""
-    for d in items[:5]:
-        entry = d.get("facts", {}).get("policy_ids")
-        if isinstance(entry, dict) and entry.get("value"):
-            return policy_id in entry["value"]
-    return None  # couldn't verify either way — no device had the fact populated
+def _device_policy_ids(device):
+    entry = device.get("facts", {}).get("policy_ids")
+    if isinstance(entry, dict) and isinstance(entry.get("value"), list):
+        return entry["value"]
+    return []
+
+
+_ORG_DEVICES_CACHE = None
+
+
+def fetch_all_org_devices(cfg, verbose=False):
+    """Fetch every device across the whole Addigy org, paginating through
+    every page.
+
+    CONFIRMED BUG (real incident, cross-client data leak): the /v2/devices
+    endpoint's "policy_id" top-level filter parameter — and the
+    filters/query.filters variants — do NOT actually filter server-side.
+    A live side-by-side check on 2026-09-01 sent two genuinely different
+    policy_ids and got back byte-for-byte identical page-1 results (same
+    50 agent_ids, same order, total=188 both times). The old code's
+    "_filter_actually_worked" spot-check (peeking at the first 5 returned
+    devices' own policy_ids fact) produced a false positive here, because
+    some devices legitimately carry multiple policy_ids and one of the
+    first 5 happened to include the target — that is NOT proof the server
+    applied the filter, just coincidence. The practical impact was
+    confirmed in production: Middleburg Properties' August 2026 report
+    listed a device ("Ana Sarai MacBook Pro") that does not belong to
+    Middleburg's policy, because the collector silently received page 1 of
+    the UNFILTERED org-wide list instead of a real per-client subset.
+
+    The fix: stop trusting any server-side filter shape at all. Fetch
+    every page of the full org device list once, and let the caller filter
+    client-side using each device's own ground-truth policy_ids fact
+    (see filter_devices_for_policy below). This is correct regardless of
+    whether Addigy ever fixes the server-side filter.
+
+    Cached at module level for the lifetime of one process, since a batch
+    run collects several clients in a row and the org-wide list is
+    identical for all of them — no point re-fetching per client."""
+    global _ORG_DEVICES_CACHE
+    if _ORG_DEVICES_CACHE is not None:
+        if verbose:
+            print(f"[debug] reusing cached org device list ({len(_ORG_DEVICES_CACHE)} devices)")
+        return _ORG_DEVICES_CACHE
+
+    headers = {"x-api-key": cfg["api_secret"], "Content-Type": "application/json"}
+    base_facts = ["device_name", "mac_os_x_version", "is_compliant", "filevault_enabled", "last_online", "online", "policy_ids"]
+    desired = _facts_list(base_facts)
+
+    all_items = []
+    page = 1
+    while True:
+        body = {"desired_fact_identifiers": desired, "page": page}
+        resp = requests.post(f"{ADDIGY_API_BASE}/devices", headers=headers, json=body)
+        if not resp.ok:
+            sys.exit(f"Addigy /devices request failed on page {page}: HTTP {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+        items = data.get("items", data if isinstance(data, list) else [])
+        all_items.extend(items)
+        meta = data.get("metadata", {})
+        if verbose:
+            print(f"[debug] fetched org devices page {page}/{meta.get('page_count')} (running total {len(all_items)})")
+        page_count = meta.get("page_count", 1)
+        if not page_count or page >= page_count:
+            break
+        page += 1
+
+    if verbose:
+        print(f"[debug] fetched {len(all_items)} total org-wide devices across all pages")
+    _ORG_DEVICES_CACHE = all_items
+    return all_items
+
+
+def filter_devices_for_policy(all_devices, policy_id, verbose=False):
+    """Client-side scoping — the only reliable way given the confirmed
+    server-side filter bug (see fetch_all_org_devices docstring). Keeps
+    devices whose OWN policy_ids fact contains this client's policy_id."""
+    matched = [d for d in all_devices if policy_id in _device_policy_ids(d)]
+    if verbose:
+        no_policy_fact = sum(1 for d in all_devices if not _device_policy_ids(d))
+        print(
+            f"[debug] client-side filter: {len(matched)} of {len(all_devices)} org devices belong to "
+            f"policy {policy_id} ({no_policy_fact} devices org-wide have no policy_ids fact at all and "
+            f"are excluded from every client)"
+        )
+    return matched
 
 
 def fetch_devices(cfg, policy_id, verbose=False):
-    """POST the Universal Device Search endpoint, filtered to one policy.
-    Confirmed: Addigy v2 authenticates via an x-api-key header specifically —
-    not Authorization/Bearer, which was an earlier wrong guess here.
-
-    The filter shape is NOT yet confirmed — a 200 response was observed that
-    silently ignored the filter entirely (identical ~189-device results for
-    two genuinely different policy IDs). Rather than guess once more, this
-    tries several real candidate shapes in order and verifies each one
-    against actual returned data before trusting it."""
-    headers = {"x-api-key": cfg["api_secret"], "Content-Type": "application/json"}
-    base_facts = ["device_name", "mac_os_x_version", "is_compliant", "filevault_enabled", "last_online", "online", "policy_ids"]
-
-    candidates = [
-        ("top-level policy_id param", {"policy_id": policy_id, "desired_fact_identifiers": _facts_list(base_facts)}),
-        ("top-level filters, policy_ids field", {
-            "filters": [{"audit_field": "policy_ids", "type": "list", "operation": "contains", "value": [policy_id]}],
-            "desired_fact_identifiers": _facts_list(base_facts),
-        }),
-        ("nested query.filters, policy_ids field", {
-            "query": {"filters": [{"audit_field": "policy_ids", "type": "list", "operation": "contains", "value": [policy_id]}]},
-            "desired_fact_identifiers": _facts_list(base_facts),
-        }),
-    ]
-
-    last_items, last_total = [], None
-    for label, body in candidates:
-        resp = requests.post(f"{ADDIGY_API_BASE}/devices", headers=headers, json=body)
-        if verbose:
-            print(f"[debug] tried '{label}' -> HTTP {resp.status_code}")
-        if not resp.ok:
-            if verbose:
-                print(f"[debug]   body rejected: {resp.text[:300]}")
-            continue
-        data = resp.json()
-        items = data.get("items", data if isinstance(data, list) else [])
-        total = data.get("metadata", {}).get("total")
-        if verbose:
-            print(f"[debug]   metadata: {data.get('metadata')}")
-        last_items, last_total = items, total
-
-        worked = _filter_actually_worked(items, policy_id)
-        if worked:
-            if verbose:
-                print(f"[debug]   VERIFIED: a returned device's policy_ids actually contains {policy_id} — using this shape")
-            return items
-        elif worked is False and verbose:
-            print(f"[debug]   filter did not take effect (returned device's policy_ids doesn't include {policy_id})")
-
-    print(
-        f"[warn] none of the tried request shapes could be verified as actually filtering by policy "
-        f"{policy_id} — falling back to the last response (total={last_total}). Numbers below may "
-        f"reflect the wrong device set. This needs Addigy's real Swagger/API docs "
-        f"(api.addigy.com/api/v2/documentation) checked directly for the correct filter shape."
-    )
-    return last_items
+    """Back-compat wrapper: fetch the full org list and scope it client-side
+    to one policy. Kept as a single entry point for collect() below."""
+    all_devices = fetch_all_org_devices(cfg, verbose=verbose)
+    return filter_devices_for_policy(all_devices, policy_id, verbose=verbose)
 
 
 def classify_device_type(model_string):
@@ -197,6 +246,7 @@ def collect(cfg, client, verbose=False):
     filevault_off_devices = []
     stale_devices = []
     long_inactive_devices = []
+    outdated_os_devices = []
     active_fleet_count = 0
     # Keyed by agentid (unique per device), not display name — multiple
     # real devices can share the same human-friendly name (confirmed
@@ -274,6 +324,12 @@ def collect(cfg, client, verbose=False):
             filevault_off_devices.append(name)
             reasons.append("FileVault disabled")
 
+        if device_type == "Mac":
+            behind = macos_versions_behind(mac_os_version)
+            if behind is not None and behind > OUTDATED_OS_VERSIONS_BEHIND_THRESHOLD:
+                outdated_os_devices.append({"device": name, "os_version": mac_os_version, "versions_behind": behind})
+                reasons.append(f"macOS {mac_os_version} is {behind} major versions behind — needs to be updated")
+
         if last_online_dt is not None and last_online_dt < stale_cutoff:
             stale_devices.append(name)
             days_silent = (now - last_online_dt).days
@@ -290,6 +346,7 @@ def collect(cfg, client, verbose=False):
             "active_fleet_count": active_fleet_count,
             "long_inactive_count": len(long_inactive_devices),
             "long_inactive_devices": long_inactive_devices,
+            "outdated_os_devices": outdated_os_devices,
             "device_type_mix": device_type_mix,
             "os_mix": os_mix,
             "compliant_count": compliant_count,

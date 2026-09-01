@@ -21,6 +21,8 @@ Usage:
 
 from __future__ import annotations
 
+import os
+
 from reportlab.lib.colors import HexColor
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle
@@ -29,6 +31,7 @@ from reportlab.graphics.shapes import Drawing, String, Wedge
 from reportlab.platypus import (
     Flowable,
     HRFlowable,
+    Image,
     KeepTogether,
     Paragraph,
     SimpleDocTemplate,
@@ -36,6 +39,7 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+from reportlab.lib.utils import ImageReader
 
 # ---------------------------------------------------------------- palette
 INK = HexColor("#1B2420")
@@ -77,6 +81,11 @@ def _styles() -> dict:
         "footer": ParagraphStyle("footer", fontName="Helvetica", fontSize=8.3, textColor=INK, leading=11),
         "app_ratio": ParagraphStyle("app_ratio", fontName="Helvetica-Bold", fontSize=9.3, textColor=INK, leading=12, alignment=2),
         "app_name": ParagraphStyle("app_name", fontName="Helvetica", fontSize=9.3, textColor=INK, leading=12),
+        "note_callout": ParagraphStyle("note_callout", fontName="Helvetica-Bold", fontSize=8.8, textColor=OCHRE, leading=12.5, spaceBefore=8, spaceAfter=4, leftIndent=8, borderColor=OCHRE, borderWidth=0),
+        "panel_h4": ParagraphStyle("panel_h4", fontName="Helvetica-Bold", fontSize=9.3, textColor=FOREST, leading=12, spaceAfter=4),
+        "panel_label": ParagraphStyle("panel_label", fontName="Helvetica", fontSize=8, textColor=INK, leading=11),
+        "panel_value": ParagraphStyle("panel_value", fontName="Helvetica-Bold", fontSize=8, textColor=INK, leading=11, alignment=2),
+        "panel_value_flag": ParagraphStyle("panel_value_flag", fontName="Helvetica-Bold", fontSize=8, textColor=OCHRE, leading=11, alignment=2),
     }
 
 
@@ -247,9 +256,29 @@ def _section_header(title, source_label, styles):
     return t
 
 
+def _masthead_brand_flowable(ctx, styles):
+    """Logo image when LOGO_PATH resolved to a real file (see
+    render_report.load_config), else plain MSP-name text — same fallback
+    rule as the HTML template's {% if logo_path %}. Previously this was
+    ALWAYS text-only: ctx['logo_path'] was populated but never read here,
+    so the masthead never showed the logo in the PDF even though the HTML
+    version did."""
+    logo_path = ctx.get("logo_path")
+    if logo_path and os.path.exists(logo_path):
+        target_height = 34  # points — matches the HTML masthead's 48px (~36pt) logo height
+        try:
+            reader = ImageReader(logo_path)
+            iw, ih = reader.getSize()
+            width = target_height * (iw / ih) if ih else target_height
+            return Image(logo_path, width=width, height=target_height)
+        except Exception:
+            pass  # fall through to text branding if the image can't be read
+    return Paragraph(ctx.get("msp_name") or "", styles["brand"])
+
+
 def _build_masthead(ctx, styles):
     flow = []
-    brand = Paragraph(ctx.get("msp_name") or "", styles["brand"])
+    brand = _masthead_brand_flowable(ctx, styles)
     period = Paragraph(_nz(ctx.get("report_period_label")), styles["period"])
     head = Table([[brand, period]], colWidths=[CONTENT_WIDTH * 0.6, CONTENT_WIDTH * 0.4])
     _cell_pad(head, bottom=6)
@@ -352,6 +381,8 @@ def _build_addigy(a, styles):
             Paragraph("macOS versions", styles["subhead"]),
             SegmentedBar(segs), Spacer(1, 6), legend_paragraph(segs, styles),
         ]))
+    if a.get("outdated_os_note"):
+        flow.append(Paragraph(a["outdated_os_note"], styles["note_callout"]))
     flow.append(Spacer(1, 26))
     return flow
 
@@ -435,6 +466,34 @@ def _build_sophos_email(e, styles):
     return flow
 
 
+def _app_panel_card(app, styles):
+    """One bordered mini-card for a Datto SaaS app (OneDrive/Exchange/
+    SharePoint/Teams), matching the HTML template's .app-panel."""
+    value_style = styles["panel_value_flag"] if app.get("flag") else styles["panel_value"]
+    rows = [
+        [Paragraph(app.get("label", ""), styles["panel_h4"]), ""],
+        [Paragraph("Active users/sites", styles["panel_label"]),
+         Paragraph(str(app.get("active_count", 0)), styles["panel_value"])],
+        [Paragraph("Fully protected (24h)", styles["panel_label"]),
+         Paragraph(f"{app.get('protected_count', 0)}/{app.get('total_count', 0)}", value_style)],
+        [Paragraph("Last fully protected", styles["panel_label"]),
+         Paragraph(app.get("last_fully_protected", "\u2014"), styles["panel_value"])],
+    ]
+    t = Table(rows, colWidths=[100, 78])
+    t.setStyle(TableStyle([
+        ("SPAN", (0, 0), (1, 0)),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BOX", (0, 0), (-1, -1), 0.75, RULE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, 0), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+    ]))
+    return t
+
+
 def _build_data_protection(dp, styles):
     if not dp:
         return []
@@ -454,6 +513,29 @@ def _build_data_protection(dp, styles):
             _cell_pad(t, top=5, bottom=5, right=10)
             t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
             flow.append(t)
+        app_panels = m365.get("app_panels")
+        if app_panels:
+            flow.append(Spacer(1, 6))
+            cards = [_app_panel_card(app, styles) for app in app_panels]
+            # 2-up grid, wrapping to a new row every 2 cards — matches the
+            # Datto partner-portal mini-panel layout from the reference
+            # screenshot (OneDrive/Exchange/SharePoint/Teams as 2x2).
+            gap = 10
+            card_w = (CONTENT_WIDTH - gap) / 2
+            rows = [cards[i:i + 2] for i in range(0, len(cards), 2)]
+            for row_cards in rows:
+                if len(row_cards) == 1:
+                    row_cards.append("")
+                grid = Table([row_cards], colWidths=[card_w, card_w])
+                grid.setStyle(TableStyle([
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (0, -1), gap),
+                ]))
+                flow.append(grid)
     bcdr = dp.get("bcdr")
     if bcdr:
         flow.append(Paragraph("On-site backup appliance", styles["subhead"]))
@@ -501,6 +583,21 @@ def _build_close_section(what_we_did, recommended_next, styles):
     return outer
 
 
+def _page_background(canvas, doc):
+    """Fills the whole page with the paper background color, matching the
+    HTML template's `body { background: var(--paper); }`. Previously the
+    PDF path never painted this — PAPER was only ever used for the small
+    donut-chart hole color — so every PDF page rendered on reportlab's
+    default white instead of the cream paper tone the HTML version has.
+    Drawn first, underneath everything: platypus calls onFirstPage/
+    onLaterPages before laying down that page's flowables, so this paints
+    behind the text rather than over it."""
+    canvas.saveState()
+    canvas.setFillColor(PAPER)
+    canvas.rect(0, 0, LETTER[0], LETTER[1], stroke=0, fill=1)
+    canvas.restoreState()
+
+
 def _footer(canvas, doc, msp_name, client_name):
     canvas.saveState()
     canvas.setStrokeColor(RULE)
@@ -537,6 +634,7 @@ def generate_pdf(context: dict, output_path: str) -> None:
     story.append(KeepTogether([_build_close_section(context.get("what_we_did"), context.get("recommended_next"), styles)]))
 
     def _on_page(canvas, doc_):
+        _page_background(canvas, doc_)
         _footer(canvas, doc_, context.get("msp_name"), context.get("client_name"))
 
     doc.build(story, onFirstPage=_on_page, onLaterPages=_on_page)

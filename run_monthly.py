@@ -24,6 +24,7 @@ import argparse
 import calendar
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import date
@@ -110,6 +111,19 @@ def any_client_needs_mailbox(clients: list[dict]) -> bool:
     return False
 
 
+def report_filename(client_name: str, month: str) -> str:
+    """Client-specific, filesystem-safe PDF filename, e.g. for
+    client_name='Middleburg Properties', month='2026-08':
+    'Middleburg Properties Monthly Report 08-2026.pdf'.
+
+    Uses 'MM-YYYY' (hyphen), not 'MM/YYYY' — a literal slash is not a
+    valid filename character on most filesystems and mail clients.
+    """
+    year, mm = month.split("-")
+    safe_name = re.sub(r'[\\/:*?"<>|]', "", client_name).strip()
+    return f"{safe_name} Monthly Report {mm}-{year}.pdf"
+
+
 def render_and_store(client: dict, cfg: dict, month: str, skip_email: bool) -> bool:
     """Builds context, renders the PDF, stores it in Postgres, emails it.
 
@@ -131,6 +145,9 @@ def render_and_store(client: dict, cfg: dict, month: str, skip_email: bool) -> b
 
     out_dir = os.path.join(cfg["output_dir"], slug)
     os.makedirs(out_dir, exist_ok=True)
+    # Internal on-disk name stays generic/stable (report-<month>.pdf) — the
+    # client-specific display name is applied only to the attachment
+    # filename below, at send/email time.
     pdf_path = os.path.join(out_dir, f"report-{month}.pdf")
     try:
         generate_pdf(context, pdf_path)
@@ -144,9 +161,11 @@ def render_and_store(client: dict, cfg: dict, month: str, skip_email: bool) -> b
     report = db.save_report(slug, client["name"], month, context, pdf_bytes)
     print(f"    [stored] {client['name']} — {len(pdf_bytes)} bytes in Postgres (report id {report.id})")
 
+    attachment_filename = report_filename(client["name"], month)
+
     if not skip_email:
         try:
-            send_report_email(client["name"], month, pdf_bytes, os.path.basename(pdf_path))
+            send_report_email(client["name"], month, pdf_bytes, attachment_filename)
             db.mark_emailed(report.id)
             print(f"    [emailed] {client['name']}")
         except Exception as e:

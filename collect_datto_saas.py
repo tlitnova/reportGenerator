@@ -25,12 +25,36 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import requests
 import yaml
 from dotenv import load_dotenv
 from requests.auth import HTTPBasicAuth
+
+# Datto's raw appType strings -> the friendly per-service labels the report
+# uses. Confirmed against live /v1/saas/{customerId}/applications responses
+# (2026-09-01): every customer probed used exactly these four appType
+# values under an "Office365" suite. Fall back to stripping the "Office365"
+# prefix for anything unrecognized (e.g. a future Google Workspace suite)
+# rather than failing.
+APP_TYPE_LABELS = {
+    "Office365Exchange": "Exchange",
+    "Office365OneDrive": "OneDrive",
+    "Office365SharePoint": "SharePoint",
+    "Office365Teams": "Teams",
+}
+
+
+def _friendly_app_label(app_type):
+    return APP_TYPE_LABELS.get(app_type, app_type.replace("Office365", "") or app_type)
+
+
+def _ms_to_date_str(ms):
+    if not ms:
+        return None
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%b %d, %Y")
 
 
 def normalize_api_url(raw):
@@ -93,6 +117,37 @@ def collect(cfg, client, verbose=False):
         print(f"[debug] matched customer: {json.dumps(matched, indent=2)}")
 
     stats = matched.get("backupStats", {})
+
+    # Per-service (OneDrive/Exchange/SharePoint/Teams) mini-panel data —
+    # confirmed live against /v1/saas/{customerId}/applications on
+    # 2026-09-01. Each appType's backupHistory is a list of rolling time
+    # windows; index 0 is always the most recent ("Between0dAnd1d") window,
+    # which is what the client-facing mini-panel should show. This
+    # endpoint does NOT expose "Backups/Exports/Restores In Progress"
+    # live counters or a "Total Protected Data" size the way the Datto
+    # partner-portal UI does — those fields simply aren't in this response,
+    # so the report's mini-panel omits them rather than fabricating zeros.
+    saas_apps = []
+    apps_resp = requests.get(f"{cfg['api_url']}/v1/saas/{saas_customer_id}/applications", auth=auth)
+    if apps_resp.ok:
+        apps_data = apps_resp.json()
+        for item in apps_data.get("items", []):
+            for suite in item.get("suites", []):
+                for app in suite.get("appTypes", []):
+                    history = app.get("backupHistory") or []
+                    latest = history[0] if history else {}
+                    saas_apps.append({
+                        "app_type": app.get("appType"),
+                        "label": _friendly_app_label(app.get("appType", "")),
+                        "active_count": latest.get("activeServiceCount"),
+                        "protected_count": latest.get("activeServiceWithPerfectBackupCount"),
+                        "total_count": latest.get("totalServiceCount"),
+                        "status": latest.get("status"),
+                        "last_fully_protected": _ms_to_date_str(latest.get("endTime")),
+                    })
+    elif verbose:
+        print(f"[warn] /v1/saas/{saas_customer_id}/applications returned {apps_resp.status_code} — skipping per-app mini-panel")
+
     return {
         "datto_saas_protection": {
             "saas_customer_id": saas_customer_id,
@@ -101,6 +156,7 @@ def collect(cfg, client, verbose=False):
             "active_services_count": stats.get("activeServicesCount"),
             "active_services_with_recent_backup_count": stats.get("activeServicesWithRecentBackupCount"),
             "backup_percentage": stats.get("backupPercentage"),
+            "saas_apps": saas_apps,
         }
     }
 

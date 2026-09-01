@@ -237,8 +237,7 @@ clients:
     addigy:
       policy_id: 9e23d5ac-9630-4972-8868-7910137027ec
     sentinelone:
-      site_id:   # TODO: sources.sentinelone is now true — needs the Site ID
-                 # from SentinelOne Settings > Sites, or GET /web/api/v2.1/sites
+      site_id: "2503986975172750946"   # "MEC" site, confirmed via SentinelOne API sites list
 
   - name: "Middleburg Properties"
     slug: client-4

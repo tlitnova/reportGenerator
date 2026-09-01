@@ -81,6 +81,8 @@
   table.plain td.num, table.plain th.num { text-align: right; }
   table.plain td.flag { color: var(--ochre); font-weight: 600; }
 
+  .note-callout { font-size: 13px; color: var(--ochre); background: rgba(169,112,47,0.08); border-left: 3px solid var(--ochre); padding: 8px 12px; margin-top: 14px; border-radius: 2px; }
+
   table.app-protection { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
   table.app-protection td { padding: 7px 0; font-size: 14px; vertical-align: middle; }
   .app-name { width: 100px; }
@@ -88,6 +90,14 @@
   .app-bar { background: var(--rule); height: 8px; border-radius: 2px; overflow: hidden; }
   .app-bar span { display: block; height: 100%; background: var(--forest); }
   .app-ratio { width: 60px; text-align: right; font-weight: 600; white-space: nowrap; }
+
+  .app-panels-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 14px 0 4px; }
+  .app-panel { border: 1px solid var(--rule); border-radius: 4px; padding: 14px 16px; }
+  .app-panel h4 { margin: 0 0 8px; font-size: 14px; color: var(--forest); font-weight: 600; }
+  .app-panel .app-panel-row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 3px 0; color: var(--ink); }
+  .app-panel .app-panel-row .app-panel-label { opacity: 0.7; }
+  .app-panel .app-panel-row .app-panel-value { font-weight: 600; }
+  .app-panel .app-panel-row .app-panel-value.flag { color: var(--ochre); }
 
   .storage-donut-row { display: flex; align-items: center; gap: 32px; margin: 12px 0 4px; flex-wrap: wrap; }
   .donut-legend { list-style: none; margin: 0; padding: 0; font-size: 13px; }
@@ -222,6 +232,9 @@
     <div class="compliance-legend">
       {% for seg in addigy.os_segments %}<span><i class="dot" style="background:{{ seg.color }}"></i>{{ seg.label }} — {{ seg.value }}</span>{% endfor %}
     </div>
+    {% endif %}
+    {% if addigy.outdated_os_note %}
+    <div class="note-callout">{{ addigy.outdated_os_note }}</div>
     {% endif %}
   </div>
   {% endif %}
@@ -364,6 +377,18 @@
       </tr>
       {% endfor %}
     </table>
+    {% endif %}
+    {% if data_protection.m365.app_panels %}
+    <div class="app-panels-grid">
+      {% for app in data_protection.m365.app_panels %}
+      <div class="app-panel">
+        <h4>{{ app.label }}</h4>
+        <div class="app-panel-row"><span class="app-panel-label">Active users/sites</span><span class="app-panel-value">{{ app.active_count }}</span></div>
+        <div class="app-panel-row"><span class="app-panel-label">Fully protected (24h)</span><span class="app-panel-value{% if app.flag %} flag{% endif %}">{{ app.protected_count }}/{{ app.total_count }}</span></div>
+        <div class="app-panel-row"><span class="app-panel-label">Last fully protected</span><span class="app-panel-value">{{ app.last_fully_protected }}</span></div>
+      </div>
+      {% endfor %}
+    </div>
     {% endif %}
     {% endif %}
 

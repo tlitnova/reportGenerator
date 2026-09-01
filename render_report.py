@@ -222,14 +222,31 @@ def build_ninjaone(data):
             {"label": k, "value": v, "pct": round(v / total * 100, 1), "color": colors[k]}
             for k, v in counts.items() if v > 0
         ]
-        prose = f"{device_count} devices are actively managed. Patch compliance sits at {pc.get('score_pct', 0)}% for the month."
+        if device_count == 0:
+            prose = "No Windows devices are currently managed by NinjaOne this month."
+        else:
+            prose = (
+                f"{device_count} Windows device{'s' if device_count != 1 else ''} "
+                f"are actively managed. Patch compliance sits at {pc.get('score_pct', 0)}% for the month."
+            )
     else:
         # Rendering rule: approved/pending were never collected for a
         # non-detailed client — they're not genuinely zero, just
         # unmeasured. Show installed/failed only, not a fake 4-way split.
         result["installed"] = pc.get("installed", 0)
         result["failed"] = pc.get("failed", 0)
-        prose = f"{device_count} devices are actively managed, with {pc.get('installed', 0)} patches installed this month."
+        # Explicitly say "Windows" so this reads clearly for clients who
+        # also have an Apple Devices (Addigy) section — "0 devices are
+        # actively managed" was ambiguous/confusing on its own (real
+        # example: HCN, which has zero NinjaOne-managed Windows machines
+        # but a full Apple fleet under Addigy).
+        if device_count == 0:
+            prose = "No Windows devices are currently managed by NinjaOne this month."
+        else:
+            prose = (
+                f"{device_count} Windows device{'s' if device_count != 1 else ''} are actively managed, "
+                f"with {pc.get('installed', 0)} patch{'es' if pc.get('installed', 0) != 1 else ''} installed this month."
+            )
 
     result["prose"] = prose
 
@@ -278,6 +295,15 @@ def build_addigy(data):
         prose += " Every active Mac has disk encryption enabled."
 
     result = {"prose": prose, "stats": stats}
+
+    outdated_os_devices = a.get("outdated_os_devices") or []
+    if outdated_os_devices:
+        names = ", ".join(d["device"] for d in outdated_os_devices)
+        count = len(outdated_os_devices)
+        result["outdated_os_note"] = (
+            f"{count} Mac{'s' if count != 1 else ''} running an outdated macOS version and "
+            f"need{'s' if count == 1 else ''} to be updated: {names}."
+        )
     if device_type_mix:
         result["device_mix_segments"] = make_segments(sorted(device_type_mix.items(), key=lambda kv: -kv[1]))
 
@@ -442,6 +468,32 @@ def build_data_protection(data):
             f"Microsoft 365 backup is running at {pct}% success" if pct < 100
             else "Microsoft 365 backup is current across every protected seat"
         )
+
+        # Per-service mini-panel (OneDrive / Exchange / SharePoint / Teams),
+        # replicating the layout of the Datto partner-portal "Backups"
+        # view the client already likes. Built from collect_datto_saas.py's
+        # saas_apps list — see that file's comment for exactly which
+        # partner-portal fields ARE and AREN'T available from the API
+        # (no in-progress counters, no total-protected-data size).
+        apps = datto_saas.get("saas_apps") or []
+        panels = []
+        for app in apps:
+            active = app.get("active_count")
+            protected = app.get("protected_count")
+            total = app.get("total_count")
+            if active is None and total is None:
+                continue  # e.g. Teams before its first backup history window exists
+            gap = (total or 0) - (protected or 0)
+            panels.append({
+                "label": app.get("label"),
+                "active_count": active if active is not None else 0,
+                "protected_count": protected if protected is not None else 0,
+                "total_count": total if total is not None else 0,
+                "last_fully_protected": app.get("last_fully_protected") or "\u2014",
+                "flag": gap > 0,
+            })
+        if panels:
+            m365["app_panels"] = panels
     elif saas_backup and saas_backup.get("total_mailboxes") is not None:
         sources.append("NinjaOne SaaS Backup")
         total_mb, active_mb = saas_backup["total_mailboxes"], saas_backup.get("mailboxes_active", 0)
