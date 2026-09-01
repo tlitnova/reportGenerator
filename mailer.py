@@ -9,29 +9,60 @@ aiassessment's.
 """
 from __future__ import annotations
 
+import logging
 import os
 import smtplib
 import ssl
 from email.message import EmailMessage
 
+logger = logging.getLogger(__name__)
+
+
+def _connect_with(host: str, port: int, username: str, password: str, use_tls: bool) -> smtplib.SMTP:
+    server = smtplib.SMTP(host, port, timeout=30)
+    server.ehlo()
+    if use_tls:
+        server.starttls(context=ssl.create_default_context())
+        server.ehlo()
+    server.login(username, password)
+    return server
+
 
 def _smtp_connect() -> smtplib.SMTP:
+    """Connects using the primary SMTP_* relay, falling back to SMTP2GO_*
+    (SMTP2GO_HOST/PORT/USERNAME/PASSWORD, TLS assumed true) if the primary
+    relay is unreachable or rejects auth. Raises RuntimeError only if
+    neither is configured, or both fail.
+    """
     smtp_host = os.environ.get("SMTP_HOST")
     smtp_port = int(os.environ.get("SMTP_PORT", "587"))
     smtp_username = os.environ.get("SMTP_USERNAME")
     smtp_password = os.environ.get("SMTP_PASSWORD")
     smtp_use_tls = os.environ.get("SMTP_USE_TLS", "true").lower() == "true"
 
-    if not all([smtp_host, smtp_username, smtp_password]):
-        raise RuntimeError("SMTP settings are incomplete (need SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD).")
+    fallback_host = os.environ.get("SMTP2GO_HOST", "mail.smtp2go.com")
+    fallback_port = int(os.environ.get("SMTP2GO_PORT", "587"))
+    fallback_username = os.environ.get("SMTP2GO_USERNAME")
+    fallback_password = os.environ.get("SMTP2GO_PASSWORD")
 
-    server = smtplib.SMTP(smtp_host, smtp_port, timeout=30)
-    server.ehlo()
-    if smtp_use_tls:
-        server.starttls(context=ssl.create_default_context())
-        server.ehlo()
-    server.login(smtp_username, smtp_password)
-    return server
+    primary_configured = all([smtp_host, smtp_username, smtp_password])
+    fallback_configured = all([fallback_username, fallback_password])
+
+    if not primary_configured and not fallback_configured:
+        raise RuntimeError(
+            "No SMTP settings configured (need SMTP_HOST/USERNAME/PASSWORD, "
+            "or SMTP2GO_USERNAME/PASSWORD as a fallback)."
+        )
+
+    if primary_configured:
+        try:
+            return _connect_with(smtp_host, smtp_port, smtp_username, smtp_password, smtp_use_tls)
+        except Exception as exc:
+            logger.warning("Primary SMTP relay (%s) failed: %s", smtp_host, exc)
+            if not fallback_configured:
+                raise
+
+    return _connect_with(fallback_host, fallback_port, fallback_username, fallback_password, True)
 
 
 def send_report_email(client_name: str, month: str, pdf_bytes: bytes, filename: str) -> None:
