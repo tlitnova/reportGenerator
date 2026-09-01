@@ -343,6 +343,8 @@ def _build_autotask(a, styles):
         rows = [(cat, hours) for cat, hours in hbc]
         flow.append(plain_table(["Category", "Hours"], rows, col_flags=[False, True], styles=styles,
                                  col_widths=[CONTENT_WIDTH * 0.7, CONTENT_WIDTH * 0.3]))
+    if a.get("collector_note"):
+        flow.append(Paragraph(a["collector_note"], styles["note_callout"]))
     flow.append(Spacer(1, 26))
     return [KeepTogether(flow[:2])] + flow[2:]
 
@@ -369,6 +371,8 @@ def _build_ninjaone(n, styles):
             Paragraph("Windows versions", styles["subhead"]),
             SegmentedBar(segs), Spacer(1, 6), legend_paragraph(segs, styles),
         ]))
+    if n.get("collector_note"):
+        flow.append(Paragraph(n["collector_note"], styles["note_callout"]))
     flow.append(Spacer(1, 26))
     return flow
 
@@ -395,6 +399,8 @@ def _build_addigy(a, styles):
         ]))
     if a.get("outdated_os_note"):
         flow.append(Paragraph(a["outdated_os_note"], styles["note_callout"]))
+    if a.get("collector_note"):
+        flow.append(Paragraph(a["collector_note"], styles["note_callout"]))
     flow.append(Spacer(1, 26))
     return flow
 
@@ -426,6 +432,8 @@ def _build_security(s, styles):
         _cell_pad(t)
         t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
         flow.append(KeepTogether([Paragraph("Endpoint activity status", styles["subhead"]), t]))
+    if s.get("collector_note"):
+        flow.append(Paragraph(s["collector_note"], styles["note_callout"]))
     flow.append(Spacer(1, 26))
     return flow
 
@@ -474,6 +482,8 @@ def _build_sophos_email(e, styles):
             col_flags=[False, True, True, True], styles=styles,
             col_widths=[CONTENT_WIDTH * 0.4, CONTENT_WIDTH * 0.2, CONTENT_WIDTH * 0.2, CONTENT_WIDTH * 0.2],
         ))
+    if e.get("collector_note"):
+        flow.append(Paragraph(e["collector_note"], styles["note_callout"]))
     flow.append(Spacer(1, 26))
     return flow
 
@@ -566,6 +576,8 @@ def _build_data_protection(dp, styles):
             _cell_pad(t)
             t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
             flow.append(KeepTogether([Spacer(1, 8), t]))
+    if dp.get("collector_note"):
+        flow.append(Paragraph(dp["collector_note"], styles["note_callout"]))
     flow.append(Spacer(1, 26))
     return flow
 

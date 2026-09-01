@@ -170,8 +170,14 @@ def report_filename(client_name: str, month: str) -> str:
     return f"{safe_name} Monthly Report {mm}-{year}.pdf"
 
 
-def render_and_store(client: dict, cfg: dict, month: str, skip_email: bool) -> bool:
+def render_and_store(client: dict, cfg: dict, month: str, skip_email: bool,
+                      collector_failures: list[dict] | None = None) -> bool:
     """Builds context, renders the PDF, stores it in Postgres, emails it.
+
+    `collector_failures` is this client's own failures from collect_for_client
+    (already run just before this, in run_for_month's loop) -- threaded
+    through to build_context() so the PDF can flag any section whose data
+    is stale because its collector failed this run.
 
     Returns True on success. Any failure here is logged and swallowed so one
     client's bad/missing data doesn't abort the whole monthly run.
@@ -184,7 +190,7 @@ def render_and_store(client: dict, cfg: dict, month: str, skip_email: bool) -> b
         return False
 
     try:
-        context = render_report.build_context(data, client, cfg, month)
+        context = render_report.build_context(data, client, cfg, month, collector_failures=collector_failures)
     except Exception as e:
         print(f"    [error] build_context failed for {client['name']}: {e}")
         return False
@@ -261,7 +267,7 @@ def run_for_month(month: str | None = None, only_client: str | None = None, forc
         for failure in client_failures:
             failure["client"] = client["name"]
         collector_failures.extend(client_failures)
-        ok = render_and_store(client, cfg, month, skip_email)
+        ok = render_and_store(client, cfg, month, skip_email, collector_failures=client_failures)
         (summary["generated"] if ok else summary["failed"]).append(client["slug"])
 
     summary["collector_failures"] = collector_failures

@@ -198,6 +198,70 @@ def build_watchlist_breakdown(data):
     return breakdown
 
 
+# Maps a collect_*.py failure's source flag to the PDF/context section key
+# it feeds. When a collector fails partway through the month, render_report
+# still renders using whatever's already in client_month.json from a prior
+# successful run (there is no in-place blanking) -- so that section's
+# numbers can silently be stale rather than current. This mapping lets
+# build_context() attach a visible note to the affected section instead of
+# presenting old data as if it were fresh. sophos_phish_threat has no PDF
+# section of its own, so a mailbox-collector failure only ever produces a
+# note on sophos_email, never on a non-existent "phish_threat" section.
+COLLECTOR_NOTE_SECTIONS = {
+    "autotask": "autotask",
+    "ninjaone": "ninjaone",
+    "sophos_endpoint": "security",
+    "sentinelone": "security",
+    "addigy": "addigy",
+    "datto_saas_protection": "data_protection",
+    "datto_bcdr": "data_protection",
+    "ninjaone_saas_backup": "data_protection",
+    "sophos_email": "sophos_email",
+}
+
+# Human-readable source names for the same note, independent of
+# WATCHLIST_SOURCE_LABELS above (that one only covers watchlist-
+# contributing sources; this one needs to cover every collector).
+COLLECTOR_SOURCE_LABELS = {
+    "autotask": "Autotask",
+    "ninjaone": "NinjaOne",
+    "sophos_endpoint": "Sophos Endpoint",
+    "sentinelone": "SentinelOne",
+    "addigy": "Addigy",
+    "datto_saas_protection": "Datto SaaS Protection",
+    "datto_bcdr": "Datto BCDR",
+    "ninjaone_saas_backup": "NinjaOne SaaS Backup",
+    "sophos_email": "Sophos Email",
+}
+
+
+def build_collector_notes(collector_failures):
+    """Turns this client's collector_failures (from run_monthly.py) into
+    {section_key: note_text}, one note per affected section. A mailbox
+    failure's source arrives as the combined string
+    'sophos_email/sophos_phish_threat' -- split it and keep only the half
+    that maps to a real section. If more than one failure lands on the
+    same section (unusual, but possible for 'security' since both
+    sophos_endpoint and sentinelone map there), their notes are joined so
+    neither is silently dropped."""
+    notes_by_section = {}
+    for failure in collector_failures or []:
+        raw_source = failure.get("source", "")
+        for source_flag in raw_source.split("/"):
+            section = COLLECTOR_NOTE_SECTIONS.get(source_flag)
+            if not section:
+                continue
+            label = COLLECTOR_SOURCE_LABELS.get(source_flag, source_flag)
+            note = (
+                f"We weren't able to refresh {label} data this month due to a collection issue "
+                "on our end -- the numbers in this section may still reflect an earlier month "
+                "rather than the current period. We're following up and will correct this as soon "
+                "as it's back online."
+            )
+            notes_by_section[section] = notes_by_section.get(section, "") + (" " if section in notes_by_section else "") + note
+    return notes_by_section
+
+
 # ---------------------------------------------------------------- Autotask
 def build_autotask(data):
     a = data.get("autotask")
@@ -705,8 +769,29 @@ def build_recommended_next(data):
     return items[:8]
 
 
-def build_context(data, client, cfg, month_str):
+def build_context(data, client, cfg, month_str, collector_failures=None):
+    """`collector_failures` is this client's own list of failure dicts
+    (as produced by run_monthly.collect_for_client) for the current run --
+    None/[] when everything collected cleanly, which is also always the
+    case for direct render_report.py CLI use (no collector run happened,
+    so nothing to flag). Attaches a 'collector_note' string to each
+    affected section's dict so the PDF can render a visible caveat instead
+    of quietly showing stale data as current."""
     watchlist = collect_needs_attention(data)
+    section_notes = build_collector_notes(collector_failures)
+
+    sections = {
+        "autotask": build_autotask(data),
+        "ninjaone": build_ninjaone(data),
+        "addigy": build_addigy(data),
+        "security": build_security(data),
+        "sophos_email": build_sophos_email(data),
+        "data_protection": build_data_protection(data),
+    }
+    for section_key, note in section_notes.items():
+        if sections.get(section_key) is not None:
+            sections[section_key]["collector_note"] = note
+
     return {
         "client_name": client["name"],
         "msp_name": cfg["msp_name"],
@@ -714,12 +799,7 @@ def build_context(data, client, cfg, month_str):
         "report_period_label": month_str,
         "headline": build_headline(data, watchlist),
         "kpis": build_kpis(data, watchlist),
-        "autotask": build_autotask(data),
-        "ninjaone": build_ninjaone(data),
-        "addigy": build_addigy(data),
-        "security": build_security(data),
-        "sophos_email": build_sophos_email(data),
-        "data_protection": build_data_protection(data),
+        **sections,
         "what_we_did": build_what_we_did(data),
         "recommended_next": build_recommended_next(data),
         "watchlist_breakdown": build_watchlist_breakdown(data),
