@@ -97,3 +97,49 @@ def send_report_email(client_name: str, month: str, pdf_bytes: bytes, filename: 
         server.send_message(message)
     finally:
         server.quit()
+
+
+def send_collector_failure_alert(month: str, failures: list[dict]) -> None:
+    """Emails a summary of collector failures from one monthly run to SMTP_TO.
+
+    Call only when `failures` is non-empty — one email per run, not per
+    failure, so a bad token that affects several clients doesn't spam the
+    inbox. Each dict in `failures` has keys: client, source, script, error.
+
+    Raises RuntimeError if SMTP_FROM/SMTP_TO aren't configured, mirroring
+    send_report_email's behavior so the caller can log-and-continue rather
+    than crash the monthly run over a missing env var.
+    """
+    smtp_from = os.environ.get("SMTP_FROM")
+    smtp_to = os.environ.get("SMTP_TO")
+    if not smtp_from or not smtp_to:
+        raise RuntimeError("SMTP_FROM or SMTP_TO missing; skipping collector failure alert.")
+
+    lines = [
+        f"The {month} monthly report run hit {len(failures)} collector issue(s).",
+        "Affected report(s) were still generated, but may be missing data for these sections:",
+        "",
+    ]
+    for failure in failures:
+        lines.append(f"- {failure['client']} / {failure['source']} ({failure['script']})")
+        lines.append(f"    {failure['error']}")
+        lines.append("")
+    lines.append(
+        "This alert is generated automatically by reportGenerator's run_monthly.py "
+        "whenever one or more collect_*.py scripts exit non-zero (expired token, "
+        "upstream API down, etc.). No action is needed if this resolves itself next "
+        "month; if it keeps recurring for the same integration, the credential likely "
+        "needs to be refreshed."
+    )
+
+    message = EmailMessage()
+    message["Subject"] = f"[reportGenerator] {month}: {len(failures)} collector issue(s)"
+    message["From"] = smtp_from
+    message["To"] = smtp_to
+    message.set_content("\n".join(lines))
+
+    server = _smtp_connect()
+    try:
+        server.send_message(message)
+    finally:
+        server.quit()

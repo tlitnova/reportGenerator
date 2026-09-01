@@ -11,6 +11,15 @@ target month is skipped without re-running its collectors or re-emailing,
 so re-running this (or the Worker's scheduling loop) never duplicates work.
 Pass --force to regenerate and re-email anyway.
 
+Collector failure alerting: any collect_*.py that exits non-zero (expired
+token, upstream API down, etc.) no longer fails silently into an ephemeral
+log. Its exit is recorded, and if the run ends with one or more collector
+failures, a single summary email is sent to SMTP_TO (mailer.py) listing
+which client/integration/script failed and why. The affected report(s)
+are still generated — collector failures never block rendering — but they
+may be missing data for that section, which is exactly what the alert is
+for. No email is sent when everything succeeds.
+
 Usage:
     python run_monthly.py                  # previous calendar month, all clients
     python run_monthly.py --month 2026-07  # explicit month
@@ -33,7 +42,7 @@ import yaml
 
 import db
 import render_report
-from mailer import send_report_email
+from mailer import send_collector_failure_alert, send_report_email
 from pdf_reportlab import generate_pdf
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -69,38 +78,75 @@ def load_clients(client_map_path: str) -> list[dict]:
     return data["clients"]
 
 
-def run_collector(script: str, client_slug: str, month: str | None, verbose: bool) -> bool:
-    """Runs one collect_*.py as a subprocess. Returns True on success."""
+def extract_error_detail(stdout: str, stderr: str) -> str:
+    """Best-effort one-line summary of a failed collector's output, for the
+    end-of-run failure alert email. Prefers the last non-empty line of
+    stderr (where sys.exit(...) messages and uncaught tracebacks land),
+    falling back to stdout, falling back to a generic marker if both are
+    empty (e.g. the process was killed before printing anything).
+    """
+    for stream in (stderr, stdout):
+        lines = [line.strip() for line in (stream or "").splitlines() if line.strip()]
+        if lines:
+            return lines[-1][:500]
+    return "(no output captured)"
+
+
+def run_collector(script: str, client_slug: str, month: str | None, verbose: bool) -> tuple[bool, str | None]:
+    """Runs one collect_*.py as a subprocess. Returns (success, error_detail) —
+    error_detail is None on success, otherwise a short string for the
+    failure alert email. Output is captured rather than streamed live (this
+    only ever runs unattended, from the Worker's scheduling loop or a manual
+    batch run) so it can be inspected for `error_detail`, then reprinted in
+    full so it still shows up in DigitalOcean's own log viewer.
+    """
     cmd = [PYTHON, os.path.join(REPO_DIR, script), "--client", client_slug]
     if month is not None:
         cmd += ["--month", month]
     if verbose:
         cmd.append("--verbose")
     print(f"    $ {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=REPO_DIR)
+    result = subprocess.run(cmd, cwd=REPO_DIR, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    if result.stderr:
+        print(result.stderr, end="" if result.stderr.endswith("\n") else "\n")
     if result.returncode != 0:
         print(f"    [error] {script} exited {result.returncode} for {client_slug}")
-        return False
-    return True
+        return False, extract_error_detail(result.stdout, result.stderr)
+    return True, None
 
 
-def run_mailbox_collector(month: str, verbose: bool) -> bool:
+def run_mailbox_collector(month: str, verbose: bool) -> tuple[bool, str | None]:
     cmd = [PYTHON, os.path.join(REPO_DIR, "collect_mailbox.py"), "--month", month]
     if verbose:
         cmd.append("--verbose")
     print(f"    $ {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=REPO_DIR)
+    result = subprocess.run(cmd, cwd=REPO_DIR, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    if result.stderr:
+        print(result.stderr, end="" if result.stderr.endswith("\n") else "\n")
     if result.returncode != 0:
         print(f"    [error] collect_mailbox.py exited {result.returncode}")
-        return False
-    return True
+        return False, extract_error_detail(result.stdout, result.stderr)
+    return True, None
 
 
-def collect_for_client(client: dict, month: str, verbose: bool) -> None:
+def collect_for_client(client: dict, month: str, verbose: bool) -> list[dict]:
+    """Runs every enabled collector for one client. Returns a list of
+    failure dicts ({source, script, error}) — empty when everything
+    succeeded. Never raises: a collector failing here must not prevent the
+    report from still being rendered with whatever data is available.
+    """
+    failures = []
     sources = client.get("sources", {})
     for flag, (script, takes_month) in PER_CLIENT_COLLECTORS.items():
         if sources.get(flag):
-            run_collector(script, client["slug"], month if takes_month else None, verbose)
+            ok, error_detail = run_collector(script, client["slug"], month if takes_month else None, verbose)
+            if not ok:
+                failures.append({"source": flag, "script": script, "error": error_detail})
+    return failures
 
 
 def any_client_needs_mailbox(clients: list[dict]) -> bool:
@@ -192,23 +238,46 @@ def run_for_month(month: str | None = None, only_client: str | None = None, forc
     pending = [c for c in clients if force or not db.report_exists(c["slug"], month)]
     print(f"=== Monthly run for {month}: {len(pending)}/{len(clients)} client(s) pending ===")
 
+    collector_failures = []
+
     if pending and any_client_needs_mailbox(pending):
         print("[mailbox] scanning shared inbox for Sophos Email/Phish Threat CSVs...")
-        run_mailbox_collector(month, verbose)
+        ok, error_detail = run_mailbox_collector(month, verbose)
+        if not ok:
+            collector_failures.append({
+                "client": "(shared mailbox — Sophos Email/Phish Threat)",
+                "source": "sophos_email/sophos_phish_threat",
+                "script": "collect_mailbox.py",
+                "error": error_detail,
+            })
 
-    summary = {"month": month, "generated": [], "skipped_already_done": [], "failed": []}
+    summary = {"month": month, "generated": [], "skipped_already_done": [], "failed": [], "collector_failures": []}
     already_done = [c["slug"] for c in clients if c not in pending]
     summary["skipped_already_done"] = already_done
 
     for client in pending:
         print(f"[client] {client['name']} ({client['slug']})")
-        collect_for_client(client, month, verbose)
+        client_failures = collect_for_client(client, month, verbose)
+        for failure in client_failures:
+            failure["client"] = client["name"]
+        collector_failures.extend(client_failures)
         ok = render_and_store(client, cfg, month, skip_email)
         (summary["generated"] if ok else summary["failed"]).append(client["slug"])
 
+    summary["collector_failures"] = collector_failures
+
     print(f"=== Done: {len(summary['generated'])} generated, "
           f"{len(summary['skipped_already_done'])} already done, "
-          f"{len(summary['failed'])} failed ===")
+          f"{len(summary['failed'])} failed, "
+          f"{len(collector_failures)} collector issue(s) ===")
+
+    if collector_failures:
+        try:
+            send_collector_failure_alert(month, collector_failures)
+            print(f"[alert] sent collector-failure summary email ({len(collector_failures)} issue(s))")
+        except Exception as e:
+            print(f"[warn] failed to send collector-failure alert email: {e}")
+
     return summary
 
 
