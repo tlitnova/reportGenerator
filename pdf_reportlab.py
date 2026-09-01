@@ -607,6 +607,38 @@ def _build_close_section(what_we_did, recommended_next, styles):
     return outer
 
 
+def _build_watchlist_breakdown(breakdown, styles):
+    """Small table breaking the 'Items needing attention' KPI down by
+    source, so the headline count isn't a black box. Placed at the end of
+    the report, right before the close-out section. Returns [] when there's
+    nothing to break down (KPI is 0/absent)."""
+    if not breakdown:
+        return []
+    total = sum(row["count"] for row in breakdown)
+    rows = [[Paragraph(row["source"], styles["close_li"]), Paragraph(str(row["count"]), styles["kpi_label"])] for row in breakdown]
+    t = Table(rows, colWidths=[CONTENT_WIDTH * 0.8, CONTENT_WIDTH * 0.2])
+    t.setStyle(TableStyle([
+        ("LINEBELOW", (0, 0), (-1, -2), 0.5, RULE),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    flow = [
+        Paragraph("Where this month's \u2018items needing attention\u2019 come from", styles["close_h3"]),
+        Paragraph(
+            f"{total} items across {len(breakdown)} source{'s' if len(breakdown) != 1 else ''} "
+            "feed the KPI at the top of this report; each device or mailbox that needs a look is counted once per source that flagged it.",
+            styles["close_empty"],
+        ),
+        Spacer(1, 6),
+        t,
+        Spacer(1, 16),
+    ]
+    return flow
+
+
 def _page_background(canvas, doc):
     """Fills the whole page with the paper background color, matching the
     HTML template's `body { background: var(--paper); }`. Previously the
@@ -655,6 +687,9 @@ def generate_pdf(context: dict, output_path: str) -> None:
     story += _build_security(context.get("security"), styles)
     story += _build_sophos_email(context.get("sophos_email"), styles)
     story += _build_data_protection(context.get("data_protection"), styles)
+    watchlist_flow = _build_watchlist_breakdown(context.get("watchlist_breakdown"), styles)
+    if watchlist_flow:
+        story.append(KeepTogether(watchlist_flow))
     story.append(KeepTogether([_build_close_section(context.get("what_we_did"), context.get("recommended_next"), styles)]))
 
     def _on_page(canvas, doc_):

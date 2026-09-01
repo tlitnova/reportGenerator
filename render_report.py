@@ -170,6 +170,34 @@ def collect_needs_attention(data):
     return items
 
 
+# Display labels for the per-source watchlist breakdown shown at the end of
+# the report (see build_watchlist_breakdown). Keep in sync with
+# NEEDS_ATTENTION_SOURCES above.
+WATCHLIST_SOURCE_LABELS = {
+    "autotask": "Autotask",
+    "ninjaone": "NinjaOne",
+    "sophos_endpoint": "Sophos Endpoint",
+    "addigy": "Addigy (Apple fleet)",
+    "sentinelone": "SentinelOne",
+    "datto_bcdr": "Datto BCDR",
+}
+
+
+def build_watchlist_breakdown(data):
+    """Per-source counts behind the 'Items needing attention' KPI, so the
+    report can show what's actually driving that number instead of a bare
+    total. Only sources that contributed at least one item are included,
+    sorted highest-count first. Returns [] when the KPI is 0/absent."""
+    breakdown = []
+    for key in NEEDS_ATTENTION_SOURCES:
+        section = data.get(key)
+        count = len(section["needs_attention"]) if section and section.get("needs_attention") else 0
+        if count:
+            breakdown.append({"source": WATCHLIST_SOURCE_LABELS.get(key, key), "count": count})
+    breakdown.sort(key=lambda row: -row["count"])
+    return breakdown
+
+
 # ---------------------------------------------------------------- Autotask
 def build_autotask(data):
     a = data.get("autotask")
@@ -688,6 +716,7 @@ def build_context(data, client, cfg, month_str):
         "data_protection": build_data_protection(data),
         "what_we_did": build_what_we_did(data),
         "recommended_next": build_recommended_next(data),
+        "watchlist_breakdown": build_watchlist_breakdown(data),
     }
 
 
