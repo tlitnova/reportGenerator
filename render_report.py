@@ -613,7 +613,13 @@ def build_kpis(data, watchlist):
         candidates.append({"value": f"{data['datto_saas_protection'].get('backup_percentage', 0)}%", "label": "M365 backup success (Datto)"})
 
     kpis = candidates[:3]
-    kpis.append({"value": len(watchlist), "label": "Items needing attention", "flag": len(watchlist) > 0})
+    # Label deliberately avoids "needing attention" — paired with the big bold
+    # KPI number and the ochre flag color, that wording read as an active
+    # crisis even when (as is typical) most of the count is long-idle
+    # devices rather than new problems. "On the watchlist" is calmer while
+    # still signaling these items are worth reviewing; the per-source
+    # breakdown at the end of the report gives the real context.
+    kpis.append({"value": len(watchlist), "label": "Items on the watchlist", "flag": len(watchlist) > 0})
     return kpis
 
 
@@ -635,9 +641,9 @@ def build_headline(data, watchlist):
 
     n = len(watchlist)
     if n == 1:
-        tail = f"{watchlist[0]['device']} needs attention this month: {watchlist[0]['reason']}."
+        tail = f"{watchlist[0]['device']} is on this month's watchlist: {watchlist[0]['reason']}."
     else:
-        tail = f"{n} items need attention this month; details below."
+        tail = f"{n} items are on this month's watchlist \u2014 see the source breakdown below for what's driving that number."
     return lead + tail
 
 
