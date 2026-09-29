@@ -11,7 +11,8 @@ Report day: the 29th of each month, except February, where it runs on the
 in the shared mailbox by the 27th of each month — this assumption about
 February specifically wasn't confirmed with the client; adjust
 REPORT_DAY_DEFAULT / REPORT_DAY_FEBRUARY below if a different day is
-wanted).
+wanted). Each run reports on the CURRENT calendar month (the month in
+progress), not the previous one.
 
 Idempotency comes from Postgres, not from process state: run_for_month()
 skips any client already stored for the target month, so it's always safe
@@ -26,7 +27,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import db
-from run_monthly import default_month, run_for_month
+from run_monthly import run_for_month
 
 REPORT_DAY_DEFAULT = int(os.environ.get("REPORT_DAY_DEFAULT", "29"))
 REPORT_DAY_FEBRUARY = int(os.environ.get("REPORT_DAY_FEBRUARY", "28"))
@@ -60,7 +61,11 @@ def main_loop():
     while True:
         try:
             now = datetime.now(TZ)
-            month = default_month()  # previous calendar month, relative to "now"
+            # Report on the month in progress (e.g. the Sep 29 run covers
+            # 2026-09). The day>=29 gate means this is always late in the
+            # month. Previously this used default_month() (previous month),
+            # which on Sep 29 targeted an already-finished August and did nothing.
+            month = now.strftime("%Y-%m")
             if should_run_today(now):
                 if all_clients_done(month):
                     print(f"[worker] {now.isoformat()}: {month} already fully generated — nothing to do.")
