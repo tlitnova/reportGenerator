@@ -83,6 +83,36 @@ clients:
     ninjaone_saas_backup:
       organization_id:
 
+  - name: "TeamLogic Nova"
+    slug: TLNOVA
+    sources:
+      autotask: false
+      ninjaone: false
+      sophos_endpoint: true
+      sophos_email: true
+      sophos_phish_threat: false
+      datto_saas_protection: false
+      datto_bcdr: false
+      addigy: false
+      ninjaone_saas_backup: false
+      sentinelone: false
+    autotask:
+      company_id: 
+    ninjaone:
+      organization_id: 
+    sophos:
+      tenant_id: 6224b576-764c-4631-b25b-73ef014cddc9
+      data_region_url: https://api-us01.central.sophos.com
+      has_xdr_or_mdr: false
+    datto_saas_protection:
+      saas_customer_id:
+    datto_bcdr:
+      device_serials: []
+    addigy:
+      policy_id:
+    ninjaone_saas_backup:
+      organization_id:
+      
   - name: "Activate Research"
     slug: client-2
     sources:
