@@ -9,6 +9,12 @@ WebControlViolation event since the previous run's window end (capped at the
 Sophos's event id), tags visits to known AI domains, and rebuilds that
 month's ai_usage_monthly rollup.
 
+Each warned visit produces two events: "'<url>' warned due to category
+'<X>'" when the warning page is shown, then "User bypassed category block
+to '<url>'" when the user clicks through. Only the warned event names the
+category. Visit counts collapse these (and the page's sub-resource loads)
+into one visit per tool/user/device per 5-minute window.
+
 Which visits show up depends on the client's Sophos web control policy:
 only sites in a Warn (or Block) category are logged, and only when "Log web
 control events" is on. Bypass events don't say which category fired, so AI
@@ -19,6 +25,7 @@ Usage:
     python collect_sophos_web.py                  # harvest every Sophos client
     python collect_sophos_web.py --client TLNOVA  # one client
     python collect_sophos_web.py --client TLNOVA --dry-run   # print, don't store
+    python collect_sophos_web.py --reclassify     # re-tag stored events after rule changes
 """
 from __future__ import annotations
 
@@ -90,6 +97,12 @@ _DOMAIN_INDEX = sorted(
 
 _URL_RE = re.compile(r"'(https?://[^']+)'")
 _CATEGORY_RE = re.compile(r"due to category '([^']+)'")
+_AI_CATEGORY_RE = re.compile(r"generative ai|artificial intelligence|\bai\b", re.I)
+
+
+def _base_domain(host: str) -> str:
+    parts = host.lower().split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
 
 
 def classify_host(host: str | None) -> str | None:
@@ -109,7 +122,14 @@ def parse_event(ev: dict, client_slug: str) -> dict:
     host = urlparse(url).hostname if url else None
     cat = _CATEGORY_RE.search(name)
     lname = name.lower()
-    action = "bypassed" if "bypassed" in lname else "blocked" if "blocked" in lname else "other"
+    action = ("bypassed" if "bypassed" in lname else "warned" if "warned" in lname
+              else "blocked" if "blocked" in lname else "other")
+    category = cat.group(1) if cat else None
+    ai_tool = classify_host(host)
+    if ai_tool is None and category and _AI_CATEGORY_RE.search(category):
+        # Sophos says it's generative AI but it's not on our list -- still
+        # count it, under its own domain, so new tools surface on their own.
+        ai_tool = f"Other AI ({_base_domain(host)})" if host else "Other AI"
     when = cs.parse_iso8601(ev["when"]) if ev.get("when") else datetime.now(timezone.utc)
     return {
         "event_id": ev["id"],
@@ -119,8 +139,8 @@ def parse_event(ev: dict, client_slug: str) -> dict:
         "action": action,
         "url": url,
         "domain": host,
-        "category": cat.group(1) if cat else None,
-        "ai_tool": classify_host(host),
+        "category": category,
+        "ai_tool": ai_tool,
         "user_name": ev.get("source"),
         "device_name": ev.get("location"),
         "endpoint_id": ev.get("endpoint_id"),
@@ -180,6 +200,28 @@ def harvest_client(client_cfg: dict, cfg: dict, dry_run: bool = False, verbose: 
             "since": since.isoformat(), "gap_before_window": gap}
 
 
+def reclassify_stored() -> int:
+    """Re-run parse_event over every stored event's raw payload (e.g. after
+    AI_TOOL_DOMAINS changes) and rebuild every affected monthly rollup."""
+    import db
+    session = db.get_session()
+    try:
+        E = db.SophosWebEvent
+        touched, n = set(), 0
+        for ev in session.query(E).yield_per(500):
+            r = parse_event(ev.raw, ev.client_slug)
+            ev.action, ev.category, ev.ai_tool, ev.domain, ev.url = r["action"], r["category"], r["ai_tool"], r["domain"], r["url"]
+            touched.add((ev.client_slug, ev.month))
+            n += 1
+        session.commit()
+    finally:
+        session.close()
+    for slug, month in sorted(touched):
+        db.rebuild_ai_usage(slug, month)
+    print(f"[web] reclassified {n} stored events across {len(touched)} client-months")
+    return n
+
+
 def sophos_clients(clients: list[dict]) -> list[dict]:
     return [c for c in clients
             if (c.get("sources") or {}).get("sophos_endpoint") and (c.get("sophos") or {}).get("tenant_id")]
@@ -212,10 +254,14 @@ def main():
     p.add_argument("--client")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--verbose", action="store_true")
+    p.add_argument("--reclassify", action="store_true", help="Re-tag stored events with current rules; no API calls")
     a = p.parse_args()
     if not a.dry_run:
         import db
         db.init_db()
+    if a.reclassify:
+        reclassify_stored()
+        return
     harvest_all(a.client, dry_run=a.dry_run, verbose=a.verbose)
 
 

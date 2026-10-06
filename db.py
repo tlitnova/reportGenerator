@@ -56,7 +56,7 @@ class SophosWebEvent(Base):
     client_slug = Column(String(64), nullable=False, index=True)
     occurred_at = Column(DateTime(timezone=True), nullable=False, index=True)
     month = Column(String(7), nullable=False, index=True)  # report-timezone "YYYY-MM"
-    action = Column(String(16), nullable=True)  # bypassed / blocked / other
+    action = Column(String(16), nullable=True)  # warned / bypassed / blocked / other
     url = Column(Text, nullable=True)
     domain = Column(String(255), nullable=True, index=True)
     category = Column(String(255), nullable=True)  # only present on block events
@@ -91,7 +91,7 @@ class AiUsageMonthly(Base):
     ai_tool = Column(String(64), nullable=False)
     user_name = Column(String(255), nullable=True)
     device_name = Column(String(255), nullable=True)
-    visits = Column(Integer, nullable=False)  # raw event count
+    visits = Column(Integer, nullable=False)  # distinct 5-minute windows with activity
     active_days = Column(Integer, nullable=False)  # distinct days with >=1 visit
     first_seen = Column(DateTime(timezone=True), nullable=True)
     last_seen = Column(DateTime(timezone=True), nullable=True)
@@ -261,7 +261,10 @@ def rebuild_ai_usage(client_slug: str, month: str) -> int:
         q = (
             session.query(
                 E.ai_tool, E.user_name, E.device_name,
-                func.count(E.event_id),
+                # One "visit" = a 5-minute window with any events for that
+                # tool/user/device -- collapses the warned+bypassed pair and
+                # sub-resource loads (claude.ai + assets.claude.ai) into one.
+                func.count(func.distinct(func.floor(func.extract("epoch", E.occurred_at) / 300))),
                 func.count(func.distinct(cast(func.timezone(os.environ.get("REPORT_TIMEZONE", "America/New_York"), E.occurred_at), Date))),
                 func.min(E.occurred_at), func.max(E.occurred_at),
             )
