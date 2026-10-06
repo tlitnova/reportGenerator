@@ -91,6 +91,35 @@ AI_TOOL_DOMAINS = {
     "v0": ["v0.dev", "v0.app"],
 }
 
+# Off-site file sharing / personal cloud storage services, for clients that
+# warn on Sophos's "Downloads" category to track staff saving files outside
+# the company's own storage. Same host-or-subdomain matching as AI tools.
+FILE_SHARING_DOMAINS = {
+    "WeTransfer": ["wetransfer.com", "we.tl", "wetransfer.net"],
+    "Google Drive": ["drive.google.com", "drive.usercontent.google.com"],
+    "Personal OneDrive": ["storage.live.com", "onedrive.live.com", "1drv.ms", "1drv.com"],
+    "Box": ["box.com", "box.net", "boxcdn.net"],
+    "Dropbox": ["dropbox.com", "dropboxusercontent.com", "db.tt"],
+    "iCloud Drive": ["icloud.com"],
+    "Hightail": ["hightail.com"],
+    "MEGA": ["mega.nz", "mega.io"],
+    "pCloud": ["pcloud.com"],
+    "MediaFire": ["mediafire.com"],
+    "Sync.com": ["sync.com"],
+    "Smash": ["fromsmash.com"],
+    "SwissTransfer": ["swisstransfer.com"],
+    "TransferNow": ["transfernow.net"],
+    "Filemail": ["filemail.com"],
+    "Send Anywhere": ["send-anywhere.com"],
+    "Egnyte": ["egnyte.com"],
+    "ShareFile": ["sharefile.com"],
+    "Proton Drive": ["drive.proton.me"],
+}
+# Hosts Sophos files under "Downloads" that aren't file sharing (app
+# stores, captcha widgets, update channels) -- excluded from the
+# "Other" bucket so background traffic doesn't pose as off-site saving.
+FILE_SHARING_NOISE = ["play.google.com", "kaptcha.com", "apps.microsoft.com", "store.steampowered.com"]
+
 _DOMAIN_INDEX = sorted(
     ((d.lower(), tool) for tool, ds in AI_TOOL_DOMAINS.items() for d in ds),
     key=lambda x: -len(x[0]),  # most specific first
@@ -104,6 +133,70 @@ _AI_CATEGORY_RE = re.compile(r"generative ai|artificial intelligence|\bai\b", re
 def _base_domain(host: str) -> str:
     parts = host.lower().split(".")
     return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def _match(host, index):
+    if not host:
+        return None
+    host = host.lower().rstrip(".")
+    for domain, name in index:
+        if host == domain or host.endswith("." + domain):
+            return name
+    return None
+
+
+_FILE_INDEX = sorted(((d, svc) for svc, ds in FILE_SHARING_DOMAINS.items() for d in ds), key=lambda x: -len(x[0]))
+_NOISE_INDEX = [(d, True) for d in FILE_SHARING_NOISE]
+
+
+def classify_file_share(host: str | None, category: str | None) -> str | None:
+    svc = _match(host, _FILE_INDEX)
+    if svc:
+        return svc
+    if host and category == "Downloads" and not _match(host, _NOISE_INDEX):
+        return f"Other ({_base_domain(host)})"
+    return None
+
+
+def file_sharing_summary(client_slug: str, month: str) -> dict:
+    """Month-to-date off-site file sharing visits, grouped like AI usage:
+    one visit = a 5-minute window per service/user/device. Computed from
+    raw events at report time (no separate rollup table)."""
+    import db
+    rows = db.web_event_rows(client_slug, month)
+    harvest = db.get_web_harvest(client_slug)
+    # The bypass event carries no category; inherit it from the paired
+    # warned event (same device + host within the same minute).
+    cat_by_key = {}
+    for when, host, cat, user, device in rows:
+        if cat:
+            cat_by_key[(device, host, int(when.timestamp()) // 60)] = cat
+    windows = {}
+    for when, host, cat, user, device in rows:
+        cat = cat or cat_by_key.get((device, host, int(when.timestamp()) // 60))
+        svc = classify_file_share(host, cat)
+        if not svc:
+            continue
+        windows.setdefault((svc, user or "(unknown)", device or "(unknown)"), set()).add(int(when.timestamp()) // 300)
+
+    def rollup(idx):
+        agg = {}
+        for key, wins in windows.items():
+            a = agg.setdefault(key[idx], {"name": key[idx], "visits": 0, "users": set(), "devices": set(), "services": set()})
+            a["visits"] += len(wins)
+            a["users"].add(key[1]); a["devices"].add(key[2]); a["services"].add(key[0])
+        return sorted(({"name": a["name"], "visits": a["visits"], "users": len(a["users"]),
+                        "devices": len(a["devices"]), "services": sorted(a["services"])} for a in agg.values()),
+                      key=lambda x: -x["visits"])
+
+    return {
+        "month": month,
+        "tracking_since": harvest.first_harvest_at.isoformat() if harvest and harvest.first_harvest_at else None,
+        "total_visits": sum(len(w) for w in windows.values()),
+        "by_service": rollup(0),
+        "by_user": rollup(1),
+        "by_device": rollup(2),
+    }
 
 
 def classify_host(host: str | None) -> str | None:

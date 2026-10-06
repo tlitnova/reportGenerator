@@ -816,6 +816,53 @@ def build_ai_usage(data, month_str):
     }
 
 
+def _short_user(name):
+    # Sophos reports "AzureAD\\First_Last_xxxx" / "DOMAIN\\user" -- drop the prefix.
+    return name.split("\\")[-1] if name else name
+
+
+def _partial_month_note(since, month_str, what):
+    if not since:
+        return None
+    since_dt = datetime.fromisoformat(since).astimezone(ZoneInfo(os.environ.get("REPORT_TIMEZONE", "America/New_York")))
+    if since_dt.strftime("%Y-%m") == month_str and since_dt.day > 1:
+        return (f"{what} tracking began on {since_dt.strftime('%B')} {since_dt.day}, so this section "
+                "covers part of the month. Windows computers on current Sophos versions only.")
+    return None
+
+
+def build_file_sharing(data, month_str):
+    """'Off-site File Sharing' section from collect_sophos_web.file_sharing_summary().
+    None when the client isn't enrolled (no 'file_sharing' key)."""
+    f = data.get("file_sharing")
+    if f is None:
+        return None
+    services = f.get("by_service") or []
+    users = f.get("by_user") or []
+    devices = f.get("by_device") or []
+    total = f.get("total_visits") or 0
+    if total:
+        prose = (f"Staff visited {len(services)} outside file-sharing or personal cloud storage "
+                 f"service{'s' if len(services) != 1 else ''} this month ({len(users)} "
+                 f"user{'s' if len(users) != 1 else ''}); {services[0]['name']} was the most used. "
+                 "These are site visits, not confirmed uploads -- a starting point for checking that "
+                 "project files stay in company storage.")
+    else:
+        prose = "No visits to outside file-sharing or personal cloud storage services were recorded this month."
+    return {
+        "prose": prose,
+        "stats": [
+            {"value": len(services), "label": "services seen"},
+            {"value": len(users), "label": "users"},
+            {"value": len(devices), "label": "devices"},
+            {"value": total, "label": "site visits logged"},
+        ] if total else None,
+        "services": [(r["name"], r["users"], r["devices"], r["visits"]) for r in services[:10]],
+        "top_users": [(_short_user(r["name"]), ", ".join(r["services"][:3]), r["visits"]) for r in users[:8]],
+        "tracking_note": _partial_month_note(f.get("tracking_since"), month_str, "File sharing"),
+    }
+
+
 def build_context(data, client, cfg, month_str, collector_failures=None):
     """`collector_failures` is this client's own list of failure dicts
     (as produced by run_monthly.collect_for_client) for the current run --
@@ -835,6 +882,7 @@ def build_context(data, client, cfg, month_str, collector_failures=None):
         "sophos_email": build_sophos_email(data),
         "data_protection": build_data_protection(data),
         "ai_usage": build_ai_usage(data, month_str),
+        "file_sharing": build_file_sharing(data, month_str),
     }
     for section_key, note in section_notes.items():
         if sections.get(section_key) is not None:

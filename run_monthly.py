@@ -195,6 +195,13 @@ def render_and_store(client: dict, cfg: dict, month: str, skip_email: bool,
         except Exception as e:
             print(f"    [warn] AI usage summary unavailable for {client['name']}: {e}")
 
+    if (client.get("sophos") or {}).get("web_file_sharing_monitoring"):
+        try:
+            from collect_sophos_web import file_sharing_summary
+            data["file_sharing"] = file_sharing_summary(slug, month)
+        except Exception as e:
+            print(f"    [warn] file sharing summary unavailable for {client['name']}: {e}")
+
     try:
         context = render_report.build_context(data, client, cfg, month, collector_failures=collector_failures)
     except Exception as e:

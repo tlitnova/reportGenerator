@@ -326,3 +326,18 @@ def ai_usage_summary(client_slug: str, month: str) -> dict:
         "by_device": rollup("device_name"),
         "non_ai_events": non_ai or 0,
     }
+
+
+def web_event_rows(client_slug: str, month: str):
+    """(occurred_at, domain, category, user_name, device_name) for every
+    stored web event for this client/month -- for report-time rollups."""
+    session = get_session()
+    try:
+        E = SophosWebEvent
+        return (
+            session.query(E.occurred_at, E.domain, E.category, E.user_name, E.device_name)
+            .filter(E.client_slug == client_slug, E.month == month)
+            .all()
+        )
+    finally:
+        session.close()

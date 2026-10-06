@@ -52,6 +52,12 @@
 #                              Sophos web profile sets Generative AI to Warn with
 #                              "Log web control events" on -- otherwise the
 #                              section would wrongly report zero AI use.
+#   sophos.web_file_sharing_monitoring  Optional, default false. When true,
+#                              the report includes an "Off-site File Sharing"
+#                              section (WeTransfer, Google Drive, personal
+#                              OneDrive, Box, Dropbox...) from Sophos web
+#                              control events. Needs the client's Sophos policy
+#                              to Warn on the "Downloads" category with logging on.
 #   sentinelone.site_id        SentinelOne console > Settings > Sites -> click
 #                              the client's site -> Site Info shows the Site
 #                              ID. Or GET /web/api/v2.1/sites with an
@@ -193,6 +199,7 @@ clients:
       tenant_id: 49583804-ce7c-4e73-82c6-acbb67ce6d4f
       data_region_url: https://api-us01.central.sophos.com
       has_xdr_or_mdr: false
+      web_file_sharing_monitoring: true
     datto_saas_protection:
       saas_customer_id: 340596
     datto_bcdr:
