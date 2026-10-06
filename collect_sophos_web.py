@@ -53,9 +53,10 @@ EVENT_TYPE = "Event::Endpoint::WebControlViolation"
 AI_TOOL_DOMAINS = {
     "ChatGPT": ["chatgpt.com", "chat.openai.com", "sora.com", "sora.chatgpt.com"],
     "OpenAI Platform": ["platform.openai.com"],
-    "Claude": ["claude.ai", "claude.com"],
+    "Claude": ["claude.ai", "claude.com", "anthropic.com"],
     "Google Gemini": ["gemini.google.com", "bard.google.com", "aistudio.google.com", "notebooklm.google.com"],
-    "Microsoft Copilot": ["copilot.microsoft.com", "copilot.cloud.microsoft", "m365copilot.com"],
+    "Microsoft Copilot": ["copilot.microsoft.com", "copilot.cloud.microsoft", "m365copilot.com",
+                          "m365.cloud.microsoft"],  # Microsoft 365 Copilot app; Sophos categorizes it as Generative AI
     "Perplexity": ["perplexity.ai"],
     "DeepSeek": ["deepseek.com"],
     "Grok": ["grok.com", "x.ai"],
