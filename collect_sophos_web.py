@@ -115,11 +115,6 @@ FILE_SHARING_DOMAINS = {
     "ShareFile": ["sharefile.com"],
     "Proton Drive": ["drive.proton.me"],
 }
-# Hosts Sophos files under "Downloads" that aren't file sharing (app
-# stores, captcha widgets, update channels) -- excluded from the
-# "Other" bucket so background traffic doesn't pose as off-site saving.
-FILE_SHARING_NOISE = ["play.google.com", "kaptcha.com", "apps.microsoft.com", "store.steampowered.com"]
-
 _DOMAIN_INDEX = sorted(
     ((d.lower(), tool) for tool, ds in AI_TOOL_DOMAINS.items() for d in ds),
     key=lambda x: -len(x[0]),  # most specific first
@@ -146,16 +141,15 @@ def _match(host, index):
 
 
 _FILE_INDEX = sorted(((d, svc) for svc, ds in FILE_SHARING_DOMAINS.items() for d in ds), key=lambda x: -len(x[0]))
-_NOISE_INDEX = [(d, True) for d in FILE_SHARING_NOISE]
 
 
 def classify_file_share(host: str | None, category: str | None) -> str | None:
-    svc = _match(host, _FILE_INDEX)
-    if svc:
-        return svc
-    if host and category == "Downloads" and not _match(host, _NOISE_INDEX):
-        return f"Other ({_base_domain(host)})"
-    return None
+    # Named services only. Sophos's "Downloads" category is too broad for a
+    # catch-all bucket to be useful -- on D&P's first day it picked up an
+    # icon CDN and a search-redirect site alongside the real services.
+    # `category` is kept in the signature in case a narrower Sophos
+    # category (e.g. a dedicated file-sharing one) becomes available.
+    return _match(host, _FILE_INDEX)
 
 
 def file_sharing_summary(client_slug: str, month: str) -> dict:

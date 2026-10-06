@@ -811,23 +811,27 @@ def build_ai_usage(data, month_str):
             {"value": total, "label": "site visits logged"},
         ] if total else None,
         "tools": [(t["name"], t["users"], t["devices"], t["visits"]) for t in tools[:10]],
-        "top_users": [(short_user(r["name"]), ", ".join(r["tools"][:3]), r["visits"]) for r in (u.get("by_user") or [])[:8]],
+        "top_users": [(_short_user(r["name"]), ", ".join(r["tools"][:3]), r["visits"]) for r in (u.get("by_user") or [])[:8]],
         "tracking_note": note,
     }
 
 
 def _short_user(name):
-    # Sophos reports "AzureAD\\First_Last_xxxx" / "DOMAIN\\user" -- drop the prefix.
-    return name.split("\\")[-1] if name else name
+    # Sophos reports "AzureAD\\First_Last_xxxx" / "DOMAIN\\user" -- drop the
+    # prefix. It reports the literal "unknown" when it couldn't tie the
+    # visit to a signed-in user.
+    if not name or name.lower() in ("unknown", "(unknown)"):
+        return "User not identified"
+    return name.split("\\")[-1]
 
 
-def _partial_month_note(since, month_str, what):
+def _partial_month_note(since, month_str, what, scope=""):
     if not since:
         return None
     since_dt = datetime.fromisoformat(since).astimezone(ZoneInfo(os.environ.get("REPORT_TIMEZONE", "America/New_York")))
     if since_dt.strftime("%Y-%m") == month_str and since_dt.day > 1:
         return (f"{what} tracking began on {since_dt.strftime('%B')} {since_dt.day}, so this section "
-                "covers part of the month. Windows computers on current Sophos versions only.")
+                f"covers part of the month.{scope}")
     return None
 
 
