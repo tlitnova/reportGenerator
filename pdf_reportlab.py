@@ -582,6 +582,34 @@ def _build_data_protection(dp, styles):
     return flow
 
 
+def _build_ai_usage(u, styles):
+    """'AI Tools in Use' -- generative AI site visits from Sophos web control."""
+    if not u:
+        return []
+    flow = [_section_header("AI Tools in Use", "Sophos Web Control", styles), Paragraph(u.get("prose", ""), styles["body"])]
+    row = stat_row(u.get("stats"), styles)
+    if row:
+        flow.append(row)
+    if u.get("tools"):
+        flow.append(Spacer(1, 10))
+        flow.append(plain_table(
+            ["AI tool", "Users", "Devices", "Visits"], u["tools"],
+            col_flags=[False, True, True, True], styles=styles,
+            col_widths=[CONTENT_WIDTH * 0.46, CONTENT_WIDTH * 0.18, CONTENT_WIDTH * 0.18, CONTENT_WIDTH * 0.18],
+        ))
+    if u.get("top_users"):
+        flow.append(Paragraph("Most active users", styles["subhead"]))
+        flow.append(plain_table(
+            ["User", "Tools", "Visits"], u["top_users"],
+            col_flags=[False, False, True], styles=styles,
+            col_widths=[CONTENT_WIDTH * 0.36, CONTENT_WIDTH * 0.46, CONTENT_WIDTH * 0.18],
+        ))
+    if u.get("tracking_note"):
+        flow.append(Paragraph(u["tracking_note"], styles["note_callout"]))
+    flow.append(Spacer(1, 26))
+    return [KeepTogether(flow[:3])] + flow[3:]
+
+
 def _build_close_section(what_we_did, recommended_next, styles):
     """The 'This month & next' box. `outer`'s single column is
     CONTENT_WIDTH - 40 wide, and its own 20pt L/R padding eats 40pt of
@@ -699,6 +727,7 @@ def generate_pdf(context: dict, output_path: str) -> None:
     story += _build_security(context.get("security"), styles)
     story += _build_sophos_email(context.get("sophos_email"), styles)
     story += _build_data_protection(context.get("data_protection"), styles)
+    story += _build_ai_usage(context.get("ai_usage"), styles)
     watchlist_flow = _build_watchlist_breakdown(context.get("watchlist_breakdown"), styles)
     if watchlist_flow:
         story.append(KeepTogether(watchlist_flow))

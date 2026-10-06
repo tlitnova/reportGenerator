@@ -27,12 +27,19 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import db
+from collect_sophos_web import harvest_all as harvest_web_events
 from run_monthly import run_for_month
 
 REPORT_DAY_DEFAULT = int(os.environ.get("REPORT_DAY_DEFAULT", "29"))
 REPORT_DAY_FEBRUARY = int(os.environ.get("REPORT_DAY_FEBRUARY", "28"))
 POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "3600"))  # check once an hour
 TZ = ZoneInfo(os.environ.get("REPORT_TIMEZONE", "America/New_York"))
+# Sophos web control (AI usage) harvest cadence. The SIEM API only keeps 24h
+# of events, so a strictly-every-24h pull would leave small gaps as the
+# hourly tick drifts; pulling every 12h with each pull starting where the
+# last one ended (de-duplicated by event id) gives full coverage.
+WEB_HARVEST_HOURS = float(os.environ.get("WEB_HARVEST_HOURS", "12"))
+_last_web_harvest = None
 
 
 def target_day_for(month: int) -> int:
@@ -53,6 +60,20 @@ def all_clients_done(month: str) -> bool:
     return all(db.report_exists(c["slug"], month) for c in clients)
 
 
+def maybe_harvest_web(now, force=False):
+    """Pull Sophos web control events for every Sophos client if it's been
+    WEB_HARVEST_HOURS since the last pull (or `force`). Never raises."""
+    global _last_web_harvest
+    if not force and _last_web_harvest and (now - _last_web_harvest).total_seconds() < WEB_HARVEST_HOURS * 3600:
+        return
+    try:
+        harvest_web_events()
+    except Exception:
+        print("[worker] ERROR during Sophos web harvest:")
+        traceback.print_exc()
+    _last_web_harvest = now
+
+
 def main_loop():
     print(f"[worker] starting. Report days: day>={REPORT_DAY_DEFAULT} (Feb: day>={REPORT_DAY_FEBRUARY}), "
           f"timezone={TZ}, poll every {POLL_SECONDS}s.")
@@ -66,8 +87,12 @@ def main_loop():
             # month. Previously this used default_month() (previous month),
             # which on Sep 29 targeted an already-finished August and did nothing.
             month = now.strftime("%Y-%m")
+            run_due = should_run_today(now) and not all_clients_done(month)
+            # Force a fresh pull right before generating reports so the AI
+            # usage section is current to the minute.
+            maybe_harvest_web(now, force=run_due)
             if should_run_today(now):
-                if all_clients_done(month):
+                if not run_due:
                     print(f"[worker] {now.isoformat()}: {month} already fully generated — nothing to do.")
                 else:
                     print(f"[worker] {now.isoformat()}: day {now.day} >= target day — running monthly pipeline for {month}.")

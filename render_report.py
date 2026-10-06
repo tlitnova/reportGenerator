@@ -40,6 +40,8 @@ import os
 import sys
 
 import yaml
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from jinja2 import Environment, FileSystemLoader
 
 try:
@@ -769,6 +771,51 @@ def build_recommended_next(data):
     return items[:8]
 
 
+def build_ai_usage(data, month_str):
+    """'AI Tools in Use' section from db.ai_usage_summary(). None when the
+    client isn't enrolled in web AI monitoring (no 'ai_usage' key)."""
+    u = data.get("ai_usage")
+    if u is None:
+        return None
+    tools = u.get("by_tool") or []
+    total = u.get("total_visits") or 0
+    users = {r["name"] for r in (u.get("by_user") or [])}
+    devices = {r["name"] for r in (u.get("by_device") or [])}
+
+    def short_user(name):
+        # Sophos reports "AzureAD\\First_Last_xxxx" / "DOMAIN\\user" -- drop the prefix.
+        return name.split("\\")[-1] if name else name
+
+    if total:
+        top = tools[0]["name"]
+        prose = (f"{len(tools)} generative AI tool{'s' if len(tools) != 1 else ''} were used this month "
+                 f"across {len(users)} user{'s' if len(users) != 1 else ''}; {top} was the most used. "
+                 "This is a picture of what's in use, not a list of problems -- a good basis for "
+                 "deciding which tools to approve.")
+    else:
+        prose = "No visits to generative AI websites were recorded on monitored computers this month."
+
+    note = None
+    since = u.get("tracking_since")
+    if since:
+        since_dt = datetime.fromisoformat(since).astimezone(ZoneInfo(os.environ.get("REPORT_TIMEZONE", "America/New_York")))
+        if since_dt.strftime("%Y-%m") == month_str and since_dt.day > 1:
+            note = (f"AI usage tracking began on {since_dt.strftime('%B')} {since_dt.day}, so this section "
+                    "covers part of the month. Windows computers on current Sophos versions only.")
+    return {
+        "prose": prose,
+        "stats": [
+            {"value": len(tools), "label": "AI tools seen"},
+            {"value": len(users), "label": "users"},
+            {"value": len(devices), "label": "devices"},
+            {"value": total, "label": "site visits logged"},
+        ] if total else None,
+        "tools": [(t["name"], t["users"], t["devices"], t["visits"]) for t in tools[:10]],
+        "top_users": [(short_user(r["name"]), ", ".join(r["tools"][:3]), r["visits"]) for r in (u.get("by_user") or [])[:8]],
+        "tracking_note": note,
+    }
+
+
 def build_context(data, client, cfg, month_str, collector_failures=None):
     """`collector_failures` is this client's own list of failure dicts
     (as produced by run_monthly.collect_for_client) for the current run --
@@ -787,6 +834,7 @@ def build_context(data, client, cfg, month_str, collector_failures=None):
         "security": build_security(data),
         "sophos_email": build_sophos_email(data),
         "data_protection": build_data_protection(data),
+        "ai_usage": build_ai_usage(data, month_str),
     }
     for section_key, note in section_notes.items():
         if sections.get(section_key) is not None:

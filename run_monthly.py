@@ -189,6 +189,12 @@ def render_and_store(client: dict, cfg: dict, month: str, skip_email: bool,
         print(f"    [skip] {client['name']}: {e}")
         return False
 
+    if (client.get("sophos") or {}).get("web_ai_monitoring"):
+        try:
+            data["ai_usage"] = db.ai_usage_summary(slug, month)
+        except Exception as e:
+            print(f"    [warn] AI usage summary unavailable for {client['name']}: {e}")
+
     try:
         context = render_report.build_context(data, client, cfg, month, collector_failures=collector_failures)
     except Exception as e:

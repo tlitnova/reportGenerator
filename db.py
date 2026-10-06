@@ -17,8 +17,11 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     String,
+    Text,
     UniqueConstraint,
     create_engine,
+    delete,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -39,6 +42,60 @@ class Report(Base):
     emailed_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (UniqueConstraint("client_slug", "month", name="uq_reports_client_month"),)
+
+
+class SophosWebEvent(Base):
+    """One Sophos Endpoint WebControlViolation event (warned/bypassed/blocked
+    site visit), as returned by the SIEM events API. The SIEM API only keeps
+    24 hours of history, so these are harvested continuously by
+    collect_sophos_web.py and accumulate here. Keyed on Sophos's own event id
+    so overlapping harvest windows can't double-count."""
+    __tablename__ = "sophos_web_events"
+
+    event_id = Column(String(64), primary_key=True)
+    client_slug = Column(String(64), nullable=False, index=True)
+    occurred_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    month = Column(String(7), nullable=False, index=True)  # report-timezone "YYYY-MM"
+    action = Column(String(16), nullable=True)  # bypassed / blocked / other
+    url = Column(Text, nullable=True)
+    domain = Column(String(255), nullable=True, index=True)
+    category = Column(String(255), nullable=True)  # only present on block events
+    ai_tool = Column(String(64), nullable=True, index=True)  # None = not a known AI domain
+    user_name = Column(String(255), nullable=True)
+    device_name = Column(String(255), nullable=True)
+    endpoint_id = Column(String(64), nullable=True)
+    raw = Column(JSONB, nullable=True)
+
+
+class SophosWebHarvest(Base):
+    """Per-client harvest bookkeeping: when we last pulled, and how far the
+    pulled window reached, so the next pull starts where the last left off."""
+    __tablename__ = "sophos_web_harvests"
+
+    client_slug = Column(String(64), primary_key=True)
+    first_harvest_at = Column(DateTime(timezone=True), nullable=True)
+    last_harvest_at = Column(DateTime(timezone=True), nullable=True)
+    last_window_end = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(Text, nullable=True)
+
+
+class AiUsageMonthly(Base):
+    """Month-to-date AI site visit counts at tool x user x device grain,
+    rebuilt from sophos_web_events after every harvest. Any rollup (by tool,
+    by user, by device) is a GROUP BY over this table."""
+    __tablename__ = "ai_usage_monthly"
+
+    id = Column(Integer, primary_key=True)
+    client_slug = Column(String(64), nullable=False, index=True)
+    month = Column(String(7), nullable=False, index=True)
+    ai_tool = Column(String(64), nullable=False)
+    user_name = Column(String(255), nullable=True)
+    device_name = Column(String(255), nullable=True)
+    visits = Column(Integer, nullable=False)  # raw event count
+    active_days = Column(Integer, nullable=False)  # distinct days with >=1 visit
+    first_seen = Column(DateTime(timezone=True), nullable=True)
+    last_seen = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 _engine = None
@@ -148,3 +205,121 @@ def list_reports(month: str | None = None):
         return q.order_by(Report.client_name).all()
     finally:
         session.close()
+
+
+# --- Sophos web / AI usage -------------------------------------------------
+
+def get_web_harvest(client_slug: str) -> SophosWebHarvest | None:
+    session = get_session()
+    try:
+        return session.get(SophosWebHarvest, client_slug)
+    finally:
+        session.close()
+
+
+def record_web_harvest(client_slug: str, window_end, error: str | None = None) -> None:
+    """Success (error=None) advances last_window_end; a failure only records
+    the error so the next attempt retries the same window."""
+    session = get_session()
+    try:
+        row = session.get(SophosWebHarvest, client_slug)
+        now = datetime.now(timezone.utc)
+        if row is None:
+            row = SophosWebHarvest(client_slug=client_slug)
+            session.add(row)
+        if error is None:
+            row.first_harvest_at = row.first_harvest_at or now
+            row.last_harvest_at = now
+            row.last_window_end = window_end
+        row.last_error = error
+        session.commit()
+    finally:
+        session.close()
+
+
+def save_web_events(rows: list[dict]) -> int:
+    """Upsert events by event_id. Returns how many were new."""
+    if not rows:
+        return 0
+    from sqlalchemy.dialects.postgresql import insert
+    session = get_session()
+    try:
+        stmt = insert(SophosWebEvent).values(rows).on_conflict_do_nothing(index_elements=["event_id"])
+        result = session.execute(stmt)
+        session.commit()
+        return result.rowcount or 0
+    finally:
+        session.close()
+
+
+def rebuild_ai_usage(client_slug: str, month: str) -> int:
+    """Recompute ai_usage_monthly for one client/month from raw events."""
+    from sqlalchemy import cast, Date
+    session = get_session()
+    try:
+        E = SophosWebEvent
+        q = (
+            session.query(
+                E.ai_tool, E.user_name, E.device_name,
+                func.count(E.event_id),
+                func.count(func.distinct(cast(func.timezone(os.environ.get("REPORT_TIMEZONE", "America/New_York"), E.occurred_at), Date))),
+                func.min(E.occurred_at), func.max(E.occurred_at),
+            )
+            .filter(E.client_slug == client_slug, E.month == month, E.ai_tool.isnot(None))
+            .group_by(E.ai_tool, E.user_name, E.device_name)
+        )
+        rows = q.all()
+        session.execute(delete(AiUsageMonthly).where(AiUsageMonthly.client_slug == client_slug, AiUsageMonthly.month == month))
+        now = datetime.now(timezone.utc)
+        for tool, user, device, visits, days, first, last in rows:
+            session.add(AiUsageMonthly(
+                client_slug=client_slug, month=month, ai_tool=tool, user_name=user, device_name=device,
+                visits=visits, active_days=days, first_seen=first, last_seen=last, updated_at=now,
+            ))
+        session.commit()
+        return len(rows)
+    finally:
+        session.close()
+
+
+def ai_usage_summary(client_slug: str, month: str) -> dict:
+    """Month-to-date AI usage rollups for the report: by tool, by user, by
+    device, plus totals and when tracking started for this client."""
+    session = get_session()
+    try:
+        A = AiUsageMonthly
+        rows = session.query(A).filter(A.client_slug == client_slug, A.month == month).all()
+        harvest = session.get(SophosWebHarvest, client_slug)
+        non_ai = (
+            session.query(func.count(SophosWebEvent.event_id))
+            .filter(SophosWebEvent.client_slug == client_slug, SophosWebEvent.month == month, SophosWebEvent.ai_tool.is_(None))
+            .scalar()
+        )
+    finally:
+        session.close()
+
+    def rollup(key):
+        agg = {}
+        for r in rows:
+            k = getattr(r, key) or "(unknown)"
+            a = agg.setdefault(k, {"name": k, "visits": 0, "users": set(), "devices": set(), "tools": set()})
+            a["visits"] += r.visits
+            a["users"].add(r.user_name or "(unknown)")
+            a["devices"].add(r.device_name or "(unknown)")
+            a["tools"].add(r.ai_tool)
+        out = []
+        for a in agg.values():
+            out.append({"name": a["name"], "visits": a["visits"], "users": len(a["users"]),
+                        "devices": len(a["devices"]), "tools": sorted(a["tools"])})
+        return sorted(out, key=lambda x: -x["visits"])
+
+    return {
+        "month": month,
+        "tracking_since": harvest.first_harvest_at.isoformat() if harvest and harvest.first_harvest_at else None,
+        "last_harvest_at": harvest.last_harvest_at.isoformat() if harvest and harvest.last_harvest_at else None,
+        "total_visits": sum(r.visits for r in rows),
+        "by_tool": rollup("ai_tool"),
+        "by_user": rollup("user_name"),
+        "by_device": rollup("device_name"),
+        "non_ai_events": non_ai or 0,
+    }

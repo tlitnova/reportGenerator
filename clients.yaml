@@ -44,6 +44,14 @@
 #                              level of detail (e.g. a compliance cycle like
 #                              CMMC) — leave off otherwise to keep larger
 #                              clients' collector runs fast.
+#   sophos.web_ai_monitoring  Optional, default false. When true, the report
+#                              includes an "AI Tools in Use" section built from
+#                              Sophos web control events (collect_sophos_web.py,
+#                              harvested twice daily by the worker for every
+#                              Sophos client). Only turn on once the client's
+#                              Sophos web profile sets Generative AI to Warn with
+#                              "Log web control events" on -- otherwise the
+#                              section would wrongly report zero AI use.
 #   sentinelone.site_id        SentinelOne console > Settings > Sites -> click
 #                              the client's site -> Site Info shows the Site
 #                              ID. Or GET /web/api/v2.1/sites with an
@@ -104,6 +112,7 @@ clients:
       tenant_id: 6224b576-764c-4631-b25b-73ef014cddc9
       data_region_url: https://api-us01.central.sophos.com
       has_xdr_or_mdr: false
+      web_ai_monitoring: true
     datto_saas_protection:
       saas_customer_id:
     datto_bcdr:
