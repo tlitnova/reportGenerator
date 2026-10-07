@@ -58,11 +58,6 @@ AI_TOOL_DOMAINS = {
     "Claude": ["claude.ai", "claude.com", "anthropic.com"],
     "Google Gemini": ["gemini.google.com", "bard.google.com", "aistudio.google.com", "notebooklm.google.com"],
     "Microsoft Copilot": ["copilot.microsoft.com", "copilot.cloud.microsoft", "m365copilot.com"],
-    # m365.cloud.microsoft is the Microsoft 365 home page (renamed the
-    # "Microsoft 365 Copilot app"). Sophos files it as Generative AI, but
-    # most visits are people opening Office, not using Copilot -- so it's
-    # kept separate rather than inflating the Copilot count.
-    "Microsoft 365 app (Copilot built in)": ["m365.cloud.microsoft"],
     "Perplexity": ["perplexity.ai"],
     "DeepSeek": ["deepseek.com"],
     "Grok": ["grok.com", "x.ai"],
@@ -121,6 +116,14 @@ FILE_SHARING_DOMAINS = {
     "ShareFile": ["sharefile.com"],
     "Proton Drive": ["drive.proton.me"],
 }
+# Hosts never counted as AI use, even when Sophos categorizes them as
+# Generative AI. m365.cloud.microsoft is the Microsoft 365 / Office home page
+# (renamed the "Microsoft 365 Copilot app"); counting it made everyone who
+# opened Office look like an AI user (208 of 221 Middleburg "AI users" on
+# day one). Clients should also Allow it in a Sophos Site List so staff
+# aren't shown the AI warning page.
+AI_EXCLUDED_DOMAINS = ["m365.cloud.microsoft"]
+
 _DOMAIN_INDEX = sorted(
     ((d.lower(), tool) for tool, ds in AI_TOOL_DOMAINS.items() for d in ds),
     key=lambda x: -len(x[0]),  # most specific first
@@ -219,8 +222,9 @@ def parse_event(ev: dict, client_slug: str) -> dict:
     action = ("bypassed" if "bypassed" in lname else "warned" if "warned" in lname
               else "blocked" if "blocked" in lname else "other")
     category = cat.group(1) if cat else None
-    ai_tool = classify_host(host)
-    if ai_tool is None and category and _AI_CATEGORY_RE.search(category):
+    excluded = _match(host, [(d, True) for d in AI_EXCLUDED_DOMAINS])
+    ai_tool = None if excluded else classify_host(host)
+    if ai_tool is None and not excluded and category and _AI_CATEGORY_RE.search(category):
         # Sophos says it's generative AI but it's not on our list -- still
         # count it, under its own domain, so new tools surface on their own.
         ai_tool = f"Other AI ({_base_domain(host)})" if host else "Other AI"
