@@ -214,7 +214,11 @@ def match_client(subject, filename, clients, only_client_slug=None, verbose=Fals
     for client in candidates:
         name_key = re.sub(r"[^a-z0-9]", "", client["name"].lower())
         slug_key = re.sub(r"[^a-z0-9]", "", client["slug"].lower())
-        if name_key in text or slug_key in text:
+        # mailbox_aliases (clients.yaml): other names a client's Sophos
+        # exports arrive under, e.g. D&P's "DandPEmail" / "on behalf of
+        # D And P". Matched the same strict alnum-only way as name/slug.
+        alias_keys = [re.sub(r"[^a-z0-9]", "", a.lower()) for a in (client.get("mailbox_aliases") or [])]
+        if name_key in text or slug_key in text or any(k and k in text for k in alias_keys):
             return client
 
     raw_text = f"{subject} {filename}".lower()

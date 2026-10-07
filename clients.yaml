@@ -58,6 +58,10 @@
 #                              OneDrive, Box, Dropbox...) from Sophos web
 #                              control events. Needs the client's Sophos policy
 #                              to Warn on the "Downloads" category with logging on.
+#   mailbox_aliases            Optional list. Other names this client's Sophos
+#                              Email / Phish Threat exports arrive under in the
+#                              shared mailbox (subject or filename), when they
+#                              don't contain the client's name or slug.
 #   sentinelone.site_id        SentinelOne console > Settings > Sites -> click
 #                              the client's site -> Site Info shows the Site
 #                              ID. Or GET /web/api/v2.1/sites with an
@@ -181,6 +185,7 @@ clients:
 
   - name: "Design & Production"
     slug: client-3
+    mailbox_aliases: ["D And P", "DandP"]  # Sophos Email exports arrive as "DandPEmail..."
     sources:
       autotask: true
       ninjaone: true

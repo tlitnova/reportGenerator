@@ -51,12 +51,18 @@ EVENT_TYPE = "Event::Endpoint::WebControlViolation"
 # google.com, or microsoft.com are excluded because most traffic to them
 # isn't AI use.
 AI_TOOL_DOMAINS = {
-    "ChatGPT": ["chatgpt.com", "chat.openai.com", "sora.com", "sora.chatgpt.com"],
+    # openai.com subdomains other than platform.* are mostly ChatGPT sign-in
+    # and assets (auth.openai.com, cdn.openai.com).
+    "ChatGPT": ["chatgpt.com", "chat.openai.com", "sora.com", "sora.chatgpt.com", "openai.com"],
     "OpenAI Platform": ["platform.openai.com"],
     "Claude": ["claude.ai", "claude.com", "anthropic.com"],
     "Google Gemini": ["gemini.google.com", "bard.google.com", "aistudio.google.com", "notebooklm.google.com"],
-    "Microsoft Copilot": ["copilot.microsoft.com", "copilot.cloud.microsoft", "m365copilot.com",
-                          "m365.cloud.microsoft"],  # Microsoft 365 Copilot app; Sophos categorizes it as Generative AI
+    "Microsoft Copilot": ["copilot.microsoft.com", "copilot.cloud.microsoft", "m365copilot.com"],
+    # m365.cloud.microsoft is the Microsoft 365 home page (renamed the
+    # "Microsoft 365 Copilot app"). Sophos files it as Generative AI, but
+    # most visits are people opening Office, not using Copilot -- so it's
+    # kept separate rather than inflating the Copilot count.
+    "Microsoft 365 app (Copilot built in)": ["m365.cloud.microsoft"],
     "Perplexity": ["perplexity.ai"],
     "DeepSeek": ["deepseek.com"],
     "Grok": ["grok.com", "x.ai"],
