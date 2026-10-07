@@ -598,12 +598,16 @@ def _build_ai_usage(u, styles):
             col_widths=[CONTENT_WIDTH * 0.46, CONTENT_WIDTH * 0.18, CONTENT_WIDTH * 0.18, CONTENT_WIDTH * 0.18],
         ))
     if u.get("top_users"):
-        flow.append(Paragraph("Most active users", styles["subhead"]))
-        flow.append(plain_table(
-            ["User", "Tools", "Visits"], u["top_users"],
-            col_flags=[False, False, True], styles=styles,
-            col_widths=[CONTENT_WIDTH * 0.36, CONTENT_WIDTH * 0.46, CONTENT_WIDTH * 0.18],
-        ))
+        # Heading + table kept together so the heading can't be stranded
+        # at the bottom of a page.
+        flow.append(KeepTogether([
+            Paragraph("Most active users", styles["subhead"]),
+            plain_table(
+                ["User", "Tools", "Visits"], u["top_users"],
+                col_flags=[False, False, True], styles=styles,
+                col_widths=[CONTENT_WIDTH * 0.36, CONTENT_WIDTH * 0.46, CONTENT_WIDTH * 0.18],
+            ),
+        ]))
     if u.get("tracking_note"):
         flow.append(Paragraph(u["tracking_note"], styles["note_callout"]))
     flow.append(Spacer(1, 26))
@@ -627,12 +631,16 @@ def _build_file_sharing(f, styles):
             col_widths=[CONTENT_WIDTH * 0.46, CONTENT_WIDTH * 0.18, CONTENT_WIDTH * 0.18, CONTENT_WIDTH * 0.18],
         ))
     if f.get("top_users"):
-        flow.append(Paragraph("Most active users", styles["subhead"]))
-        flow.append(plain_table(
-            ["User", "Services", "Visits"], f["top_users"],
-            col_flags=[False, False, True], styles=styles,
-            col_widths=[CONTENT_WIDTH * 0.36, CONTENT_WIDTH * 0.46, CONTENT_WIDTH * 0.18],
-        ))
+        # Heading + table kept together so the heading can't be stranded
+        # at the bottom of a page.
+        flow.append(KeepTogether([
+            Paragraph("Most active users", styles["subhead"]),
+            plain_table(
+                ["User", "Services", "Visits"], f["top_users"],
+                col_flags=[False, False, True], styles=styles,
+                col_widths=[CONTENT_WIDTH * 0.36, CONTENT_WIDTH * 0.46, CONTENT_WIDTH * 0.18],
+            ),
+        ]))
     if f.get("tracking_note"):
         flow.append(Paragraph(f["tracking_note"], styles["note_callout"]))
     flow.append(Spacer(1, 26))

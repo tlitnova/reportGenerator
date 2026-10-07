@@ -788,7 +788,7 @@ def build_ai_usage(data, month_str):
 
     if total:
         top = tools[0]["name"]
-        prose = (f"{len(tools)} generative AI tool{'s' if len(tools) != 1 else ''} were used this month "
+        prose = (f"{len(tools)} generative AI tool{'s were' if len(tools) != 1 else ' was'} used this month "
                  f"across {len(users)} user{'s' if len(users) != 1 else ''}; {top} was the most used. "
                  "This is a picture of what's in use, not a list of problems -- a good basis for "
                  "deciding which tools to approve.")
