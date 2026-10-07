@@ -175,6 +175,7 @@ clients:
       tenant_id: 6031a2f9-db30-4fce-9e48-3ef1ad99338f
       data_region_url: https://api-us01.central.sophos.com
       has_xdr_or_mdr: false
+      web_ai_monitoring: true
     datto_saas_protection:
       saas_customer_id: 465384
 
@@ -200,6 +201,7 @@ clients:
       data_region_url: https://api-us01.central.sophos.com
       has_xdr_or_mdr: false
       web_file_sharing_monitoring: true
+      web_ai_monitoring: true
     datto_saas_protection:
       saas_customer_id: 340596
     datto_bcdr:
@@ -278,6 +280,7 @@ clients:
       tenant_id: 5880f9d3-9d1a-4c56-a5fe-4b9d41f51ae5
       data_region_url: https://api-us01.central.sophos.com
       has_xdr_or_mdr: false
+      web_ai_monitoring: true
     datto_saas_protection:
       saas_customer_id: 452736
     addigy:
@@ -306,6 +309,7 @@ clients:
       tenant_id: 92230288-6e29-443d-b57a-86d84c62b66c
       data_region_url: https://api-us03.central.sophos.com
       has_xdr_or_mdr: false
+      web_ai_monitoring: true
     addigy:
       policy_id: 98b0b8f9-ef07-4df7-8eca-9b6c566a313b
     ninjaone_saas_backup:
