@@ -261,6 +261,7 @@ clients:
       tenant_id: 2a9d2422-8842-4a8e-b338-bc2d700e35d9
       data_region_url: https://api-us03.central.sophos.com
       has_xdr_or_mdr: false
+      web_ai_monitoring: true
     datto_saas_protection:
       saas_customer_id: 474144
 
