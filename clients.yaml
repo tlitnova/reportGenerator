@@ -214,6 +214,40 @@ clients:
     addigy:
       policy_id: c3ececea-c541-4516-9000-a5ebb3e199d3
 
+name: "Entryway Talent"
+    slug: ntryway
+    sources:
+      autotask: false
+      ninjaone: false
+      sophos_endpoint: true
+      sophos_email: true
+      sophos_phish_threat: false
+      datto_saas_protection: false
+      datto_bcdr: false
+      addigy: false
+      ninjaone_saas_backup: false
+      sentinelone: false
+    autotask:
+      company_id: 
+    ninjaone:
+      organization_id: 
+    sophos:
+      tenant_id: 2dcf24df-5e7b-4499-bcb6-8583b45a8378
+      data_region_url: https://api-us01.central.sophos.com
+      has_xdr_or_mdr: false
+      web_file_sharing_monitoring: true
+      web_ai_monitoring: true
+    datto_saas_protection:
+      saas_customer_id:
+    datto_bcdr:
+      device_serials: []
+    addigy:
+      policy_id:
+    ninjaone_saas_backup:
+      organization_id:
+
+
+
   - name: "HCN"
     slug: client-5
     sources:
