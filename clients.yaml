@@ -214,8 +214,8 @@ clients:
     addigy:
       policy_id: c3ececea-c541-4516-9000-a5ebb3e199d3
 
-name: "Entryway Talent"
-    slug: ntryway
+  - name: "Entryway Talent"
+    slug: entryway
     sources:
       autotask: false
       ninjaone: false
