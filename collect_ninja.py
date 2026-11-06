@@ -56,6 +56,13 @@ DEVICE_PAGE_SIZE = 1000
 # NinjaOne account's rate limits behave in practice.
 MAX_WORKERS = 8
 
+# NinjaOne custom field (Date type) holding the date each device was
+# approved into our NinjaOne tenant -- used in the report as a stand-in
+# for device age. Backfilled from activity history for existing devices;
+# populated by automation for new ones. Ninja returns Date fields as epoch
+# milliseconds.
+APPROVAL_DATE_FIELD = "approvaldate"
+
 # The four endpoints that together cover the vendor's own four patch
 # states. Two are OS patches, two are 3rd-party ("software") patches; per
 # the vendor's own "Patch Compliance" report, the page-level score combines
@@ -285,6 +292,41 @@ def fetch_device_data(ninja, device, stale_cutoff, now, month_start, month_end, 
     return result
 
 
+def fetch_device_age(ninja, org_id, devices, verbose=False):
+    """Approval date per device from the APPROVAL_DATE_FIELD custom field.
+    One bulk query for the org instead of a call per device. Never raises:
+    a failure here shouldn't sink the patching data, so it comes back as
+    {"error": ...} and the report shows a note instead of the section."""
+    try:
+        resp = ninja.get("/v2/queries/custom-fields", params={
+            "df": f"org = {org_id}", "fields": APPROVAL_DATE_FIELD, "pageSize": 5000,
+        })
+    except RuntimeError as e:
+        if verbose:
+            print(f"[debug] approval date query failed: {e}")
+        return {"error": str(e)[:300]}
+    values = {r.get("deviceId"): (r.get("fields") or {}).get(APPROVAL_DATE_FIELD)
+              for r in (resp.get("results") or [])}
+    dated, missing = [], []
+    for d in devices:
+        name = d.get("systemName") or d.get("dnsName") or f"device-{d.get('id')}"
+        v = values.get(d.get("id"))
+        if not v:
+            missing.append(name)
+            continue
+        try:
+            v = float(v)
+            ts = v / 1000 if v > 1e11 else v  # ms (Ninja Date fields) or s
+            approved = datetime.fromtimestamp(ts, timezone.utc).date().isoformat()
+        except (TypeError, ValueError, OverflowError, OSError):
+            missing.append(name)
+            continue
+        dated.append({"device": name, "node_class": d.get("nodeClass"), "approved": approved})
+    if verbose:
+        print(f"[debug] approval dates: {len(dated)} dated, {len(missing)} missing")
+    return {"field": APPROVAL_DATE_FIELD, "devices": dated, "missing": missing}
+
+
 def collect(cfg, client, month_str, verbose=False):
     org_id = client["ninjaone"]["organization_id"]
     detailed = client["ninjaone"].get("detailed_patch_compliance", False)
@@ -398,6 +440,7 @@ def collect(cfg, client, month_str, verbose=False):
             },
             "devices_with_failed_patches": devices_with_failed_patches,
             "needs_attention": needs_attention,
+            "device_age": fetch_device_age(ninja, org_id, devices, verbose),
         }
     }
 

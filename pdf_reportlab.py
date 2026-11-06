@@ -377,6 +377,40 @@ def _build_ninjaone(n, styles):
     return flow
 
 
+def _build_device_age(d, styles):
+    """'Device Age' -- time since each device was added to our management
+    (NinjaOne approvaldate custom field), as a stand-in for device age."""
+    if not d:
+        return []
+    flow = [_section_header("Device Age", "NinjaOne", styles)]
+    if d.get("prose"):
+        flow.append(Paragraph(d["prose"], styles["body"]))
+    row = stat_row(d.get("stats"), styles)
+    if row:
+        flow.append(row)
+    if d.get("segments"):
+        segs = d["segments"]
+        flow.append(KeepTogether([
+            Paragraph("Time in service", styles["subhead"]),
+            SegmentedBar(segs), Spacer(1, 6), legend_paragraph(segs, styles),
+        ]))
+    if d.get("oldest"):
+        flow.append(KeepTogether([
+            Paragraph(d.get("oldest_title") or "Longest in service", styles["subhead"]),
+            plain_table(
+                ["Device", "Type", "Added to our management", "Years"], d["oldest"],
+                col_flags=[False, False, False, True], styles=styles,
+                col_widths=[CONTENT_WIDTH * 0.34, CONTENT_WIDTH * 0.18, CONTENT_WIDTH * 0.34, CONTENT_WIDTH * 0.14],
+            ),
+        ]))
+    if d.get("age_note"):
+        flow.append(Paragraph(d["age_note"], styles["note_callout"]))
+    if d.get("collector_note"):
+        flow.append(Paragraph(d["collector_note"], styles["note_callout"]))
+    flow.append(Spacer(1, 26))
+    return [KeepTogether(flow[:3])] + flow[3:]
+
+
 def _build_addigy(a, styles):
     if not a:
         return []
@@ -760,6 +794,7 @@ def generate_pdf(context: dict, output_path: str) -> None:
     story += _build_kpi_strip(context.get("kpis"), styles)
     story += _build_autotask(context.get("autotask"), styles)
     story += _build_ninjaone(context.get("ninjaone"), styles)
+    story += _build_device_age(context.get("device_age"), styles)
     story += _build_addigy(context.get("addigy"), styles)
     story += _build_security(context.get("security"), styles)
     story += _build_sophos_email(context.get("sophos_email"), styles)

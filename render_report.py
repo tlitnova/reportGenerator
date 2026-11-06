@@ -867,6 +867,129 @@ def build_file_sharing(data, month_str):
     }
 
 
+# ------------------------------------------------------------------ Device age
+AGE_BANDS = [("Under 1 year", 0, 1), ("1\u20132 years", 1, 2), ("2\u20133 years", 2, 3), ("3+ years", 3, None)]
+AGE_BAND_COLORS = ["#1F4B3F", "#6B8F7B", "#D8C48A", "#A9702F"]
+# Devices approved within this many days of a client's first approval date
+# were most likely already running when we took the client on (bulk
+# onboarding), so their approval date understates their real age.
+ONBOARDING_WINDOW_DAYS = 14
+ONBOARDING_MIN_DEVICES = 3
+
+
+def _device_type(node_class):
+    nc = (node_class or "").upper()
+    if "SERVER" in nc:
+        return "Server"
+    if "MAC" in nc:
+        return "Mac"
+    if "WORKSTATION" in nc:
+        return "Workstation"
+    return nc.replace("_", " ").title() or "Device"
+
+
+def _fmt_date(d):
+    return f"{d.strftime('%B')} {d.day}, {d.year}"
+
+
+def build_device_age(data, month_str):
+    """'Device Age' section from NinjaOne's approvaldate custom field -- the
+    date each device was added to our management, used as a stand-in for
+    its age. None when NinjaOne isn't a source or has no devices."""
+    from datetime import date, timedelta
+    import calendar
+    import statistics
+
+    n = data.get("ninjaone")
+    a = (n or {}).get("device_age")
+    if not n or a is None or not n.get("device_count"):
+        return None
+    if a.get("error"):
+        return {"prose": "", "collector_note": "Device age couldn't be read from NinjaOne this month; "
+                                               "it will return once the approval-date field is reachable again."}
+    devices = a.get("devices") or []
+    missing = a.get("missing") or []
+    if not devices:
+        return None
+
+    y, m = (int(x) for x in month_str.split("-"))
+    as_of = min(date.today(), date(y, m, calendar.monthrange(y, m)[1]))
+    rows = []
+    for d in devices:
+        approved = date.fromisoformat(d["approved"])
+        rows.append({**d, "approved_d": approved, "years": max(0.0, (as_of - approved).days / 365.25)})
+    first = min(r["approved_d"] for r in rows)
+    cohort_cutoff = first + timedelta(days=ONBOARDING_WINDOW_DAYS)
+    cohort = [r for r in rows if r["approved_d"] <= cohort_cutoff]
+    if len(cohort) < ONBOARDING_MIN_DEVICES:
+        cohort = []
+    cohort_ids = {id(r) for r in cohort}
+
+    counts = []
+    for label, lo, hi in AGE_BANDS:
+        counts.append((label, sum(1 for r in rows if r["years"] >= lo and (hi is None or r["years"] < hi))))
+    total = len(rows)
+    segments = [
+        {"label": label, "value": v, "pct": round(v / total * 100, 1), "color": color}
+        for (label, v), color in zip(counts, AGE_BAND_COLORS) if v
+    ]
+    median = statistics.median(r["years"] for r in rows)
+    three_plus = counts[-1][1]
+
+    prose = (f"Across {total} managed device{'s' if total != 1 else ''}, the typical device has been "
+             f"with us about {median:.1f} year{'s' if round(median, 1) != 1 else ''}")
+    prose += (f", and {three_plus} {'have' if three_plus != 1 else 'has'} been in service 3 years or more."
+              if three_plus else ", and none have reached 3 years yet.")
+    cohort_years = max(0.0, (as_of - first).days / 365.25)
+    if cohort:
+        prose += (f" {len(cohort)} of them were already in place when we began managing them in "
+                  f"{first.strftime('%B')} {first.year}, so they're at least {cohort_years:.1f} years old "
+                  "and likely older.")
+
+    oldest = sorted(rows, key=lambda r: (r["approved_d"], r["device"].lower()))[:8]
+    table = []
+    for r in oldest:
+        in_cohort = id(r) in cohort_ids
+        # Everyone in the onboarding cohort shows the same "Before <start>"
+        # date and age -- we can't tell them apart, so don't imply we can.
+        table.append((
+            r["device"], _device_type(r.get("node_class")),
+            f"Before {_fmt_date(first)}" if in_cohort else _fmt_date(r["approved_d"]),
+            f"{cohort_years:.1f}+" if in_cohort else f"{r['years']:.1f}",
+        ))
+    if len(rows) <= len(table):
+        oldest_title = "All devices by time in service"
+    elif cohort and all(id(r) in cohort_ids for r in oldest):
+        oldest_title = (f"Longest in service \u2014 {len(table)} of the {len(cohort)} devices "
+                        "already in place when we started")
+    else:
+        oldest_title = "Longest in service"
+    stats = [
+        {"value": total, "label": "devices with a date"},
+        {"value": f"{median:.1f} yrs", "label": "typical time with us"},
+        {"value": three_plus, "label": "3 years or more"},
+    ]
+    if cohort:
+        stats.append({"value": len(cohort), "label": "in place before we started"})
+
+    note = ("Age is measured from when each device was added to our management, not its purchase date.")
+    if cohort:
+        note += (f" Devices that were already running when we took on this account show "
+                 f"\u201cBefore {_fmt_date(first)}\u201d; their real age is higher.")
+    if missing:
+        note += (f" {len(missing)} device{'s' if len(missing) != 1 else ''} "
+                 f"{'have' if len(missing) != 1 else 'has'} no date recorded yet and "
+                 f"{'are' if len(missing) != 1 else 'is'} not included.")
+    return {
+        "prose": prose,
+        "stats": stats,
+        "segments": segments,
+        "oldest": table,
+        "oldest_title": oldest_title,
+        "age_note": note,
+    }
+
+
 def build_context(data, client, cfg, month_str, collector_failures=None):
     """`collector_failures` is this client's own list of failure dicts
     (as produced by run_monthly.collect_for_client) for the current run --
@@ -881,6 +1004,7 @@ def build_context(data, client, cfg, month_str, collector_failures=None):
     sections = {
         "autotask": build_autotask(data),
         "ninjaone": build_ninjaone(data),
+        "device_age": build_device_age(data, month_str),
         "addigy": build_addigy(data),
         "security": build_security(data),
         "sophos_email": build_sophos_email(data),
@@ -891,6 +1015,9 @@ def build_context(data, client, cfg, month_str, collector_failures=None):
     for section_key, note in section_notes.items():
         if sections.get(section_key) is not None:
             sections[section_key]["collector_note"] = note
+    # Device age comes from the same NinjaOne pull, so it shares its caveat.
+    if section_notes.get("ninjaone") and sections.get("device_age") is not None:
+        sections["device_age"].setdefault("collector_note", section_notes["ninjaone"])
 
     return {
         "client_name": client["name"],
