@@ -117,3 +117,13 @@ SHAREPOINT_DRIVE_PATH=/Client Reports
 PDF_ENGINE=weasyprint             # weasyprint | chromium
 TEMPLATE_PATH=./templates/monthly-report.html
 LOGO_PATH=./img/logo.png
+
+# --- NinjaOne activity history (collect_ninja_activity.py) -----------------
+# Copies script/automation run activity into Postgres for the /ops pages in
+# aiassessment. Uses the NINJA_* API credentials above (monitoring scope).
+NINJA_ACTIVITY_ENABLED=true
+NINJA_ACTIVITY_HARVEST_MINUTES=15
+NINJA_ACTIVITY_TYPES=ACTION,ACTIONSET,CONDITION_ACTION,CONDITION_ACTIONSET
+NINJA_ACTIVITY_BACKFILL_DAYS=90      # first run only
+NINJA_ACTIVITY_RETENTION_DAYS=730    # purged daily
+NINJA_DIRECTORY_REFRESH_HOURS=6

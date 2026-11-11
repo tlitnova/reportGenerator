@@ -9,11 +9,14 @@ points at the same cluster aiassessment uses) — this module's table
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     Column,
     DateTime,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -22,6 +25,7 @@ from sqlalchemy import (
     create_engine,
     delete,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -95,6 +99,69 @@ class AiUsageMonthly(Base):
     active_days = Column(Integer, nullable=False)  # distinct days with >=1 visit
     first_seen = Column(DateTime(timezone=True), nullable=True)
     last_seen = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class NinjaActivity(Base):
+    """One NinjaOne device activity (script/automation run step), copied from
+    GET /v2/activities by collect_ninja_activity.py so history outlives
+    NinjaOne's 1,000-entry Activity feed. Keyed on NinjaOne's activity id.
+    Device/org/technician names are captured at insert time so retired or
+    renamed devices still read correctly."""
+    __tablename__ = "ninja_activities"
+
+    activity_id = Column(BigInteger, primary_key=True)
+    activity_time = Column(DateTime(timezone=True), nullable=False, index=True)
+    activity_type = Column(String(64), nullable=True, index=True)   # ACTION / ACTIONSET / ...
+    status_code = Column(String(64), nullable=True)                 # START_REQUESTED / COMPLETED / ...
+    status = Column(String(255), nullable=True)
+    phase = Column(String(16), nullable=True, index=True)           # requested / running / completed / cancelled / other
+    result = Column(String(32), nullable=True, index=True)          # SUCCESS / FAILURE / UNSUPPORTED / UNCOMPLETED
+    severity = Column(String(16), nullable=True)
+    series_uid = Column(String(64), nullable=True, index=True)
+    source_config_uid = Column(String(64), nullable=True)
+    script_name = Column(String(255), nullable=True, index=True)
+    device_id = Column(Integer, nullable=True, index=True)
+    device_name = Column(String(255), nullable=True, index=True)
+    org_id = Column(Integer, nullable=True, index=True)
+    org_name = Column(String(255), nullable=True)
+    location_name = Column(String(255), nullable=True)
+    user_id = Column(Integer, nullable=True, index=True)
+    user_name = Column(String(255), nullable=True)
+    user_inherited = Column(Boolean, nullable=False, default=False)  # filled from the same run's request row
+    subject = Column(Text, nullable=True)
+    message = Column(Text, nullable=True)
+    raw = Column(JSONB, nullable=True)
+    ingested_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_ninja_act_script_time", "script_name", "activity_time"),
+        Index("ix_ninja_act_device_time", "device_id", "activity_time"),
+    )
+
+
+class NinjaActivityCursor(Base):
+    """Per-activity-type high-water mark (highest NinjaOne activity id stored)."""
+    __tablename__ = "ninja_activity_cursors"
+
+    activity_type = Column(String(64), primary_key=True)
+    last_activity_id = Column(BigInteger, nullable=True)
+    first_harvest_at = Column(DateTime(timezone=True), nullable=True)
+    last_harvest_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(Text, nullable=True)
+
+
+class NinjaDevice(Base):
+    """Latest known name/org for each NinjaOne device (refreshed by the harvester)."""
+    __tablename__ = "ninja_devices"
+
+    device_id = Column(Integer, primary_key=True)
+    system_name = Column(String(255), nullable=True)
+    display_name = Column(String(255), nullable=True, index=True)
+    org_id = Column(Integer, nullable=True, index=True)
+    org_name = Column(String(255), nullable=True)
+    location_name = Column(String(255), nullable=True)
+    node_class = Column(String(64), nullable=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
@@ -339,5 +406,111 @@ def web_event_rows(client_slug: str, month: str):
             .filter(E.client_slug == client_slug, E.month == month)
             .all()
         )
+    finally:
+        session.close()
+
+
+# --- NinjaOne activity history ---------------------------------------------
+
+def get_ninja_activity_cursor(activity_type: str) -> int | None:
+    session = get_session()
+    try:
+        row = session.get(NinjaActivityCursor, activity_type)
+        return row.last_activity_id if row and row.last_activity_id else None
+    finally:
+        session.close()
+
+
+def set_ninja_activity_cursor(activity_type: str, last_id: int | None, error: str | None = None) -> None:
+    """Success (error=None) advances the cursor; a failure only records the error."""
+    session = get_session()
+    try:
+        row = session.get(NinjaActivityCursor, activity_type)
+        now = datetime.now(timezone.utc)
+        if row is None:
+            row = NinjaActivityCursor(activity_type=activity_type)
+            session.add(row)
+        if error is None:
+            row.first_harvest_at = row.first_harvest_at or now
+            row.last_harvest_at = now
+            if last_id:
+                row.last_activity_id = max(last_id, row.last_activity_id or 0)
+        row.last_error = error
+        session.commit()
+    finally:
+        session.close()
+
+
+def save_ninja_activities(rows: list[dict]) -> int:
+    """Insert by NinjaOne activity id; duplicates are ignored. Returns new-row count."""
+    if not rows:
+        return 0
+    from sqlalchemy.dialects.postgresql import insert
+    session = get_session()
+    try:
+        stmt = (insert(NinjaActivity).values(rows)
+                .on_conflict_do_nothing(index_elements=["activity_id"])
+                .returning(NinjaActivity.activity_id))
+        inserted = len(session.execute(stmt).fetchall())
+        session.commit()
+        return inserted
+    finally:
+        session.close()
+
+
+def inherit_ninja_activity_users(days: int = 3) -> int:
+    """NinjaOne puts the technician on the START_REQUESTED row; the later
+    STARTED/COMPLETED rows of the same run often have no userId. Copy it
+    across rows that share a seriesUid + device, for recent rows only."""
+    session = get_session()
+    try:
+        result = session.execute(text("""
+            UPDATE ninja_activities a
+               SET user_id = r.user_id, user_name = r.user_name, user_inherited = TRUE
+              FROM ninja_activities r
+             WHERE a.user_id IS NULL
+               AND a.series_uid IS NOT NULL
+               AND a.series_uid = r.series_uid
+               AND a.device_id = r.device_id
+               AND r.user_id IS NOT NULL
+               AND a.activity_time > now() - make_interval(days => :days)
+        """), {"days": days})
+        session.commit()
+        return result.rowcount or 0
+    finally:
+        session.close()
+
+
+def save_ninja_directory(directory: dict) -> int:
+    """Upsert current device names/orgs into ninja_devices."""
+    devices = list(directory.get("devices", {}).values())
+    if not devices:
+        return 0
+    from sqlalchemy.dialects.postgresql import insert
+    now = datetime.now(timezone.utc)
+    session = get_session()
+    try:
+        for i in range(0, len(devices), 500):
+            chunk = [dict(d, updated_at=now) for d in devices[i:i + 500]]
+            stmt = insert(NinjaDevice).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["device_id"],
+                set_={c: stmt.excluded[c] for c in ("system_name", "display_name", "org_id", "org_name",
+                                                     "location_name", "node_class", "updated_at")},
+            )
+            session.execute(stmt)
+        session.commit()
+        return len(devices)
+    finally:
+        session.close()
+
+
+def purge_ninja_activities(retention_days: int) -> int:
+    session = get_session()
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        result = session.execute(delete(NinjaActivity).where(NinjaActivity.activity_time < cutoff))
+        session.commit()
+        return result.rowcount or 0
     finally:
         session.close()

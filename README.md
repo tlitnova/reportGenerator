@@ -40,6 +40,7 @@ SentinelOne.
 | `collect_mailbox.py` | Scans a shared mailbox for Sophos Email + Phish Threat report PDFs, matches to clients, parses them | ✅ Done, verified against 5 real client reports |
 | `collect_ninjaone_saas_backup.py` | Dropsuite email/SaaS backup status: seats, storage, mailbox coverage, added-this-month | ✅ Done, verified against real data |
 | `collect_sentinelone.py` | Endpoint protection (agent staleness, infected devices, monthly threat detections) for clients not on Sophos Endpoint | ✅ Done, verified against real data |
+| `collect_ninja_activity.py` | Long-term history of every NinjaOne script/automation run (device, technician, result) for the `/ops` search pages in aiassessment | New — verify field shapes with `--dry-run --verbose` |
 | `render_report.py` | Turns each client's collected JSON into the final PDF | ❌ Not started |
 | `run_monthly.py` | Orchestrates all collectors + render for every client | ❌ Not started |
 
@@ -57,6 +58,23 @@ python3 collect_X.py --client <slug> --dry-run --verbose
 scans the whole shared mailbox at once and matches each report to whichever
 client it belongs to. Use `--client <slug>` on it only to filter output
 while debugging, not as its normal mode.
+
+## NinjaOne script history
+
+NinjaOne's Activity feed only shows the latest 1,000 entries. The worker now
+copies every script/automation activity (`/v2/activities`, types in
+`NINJA_ACTIVITY_TYPES`) into the `ninja_activities` table every 15 minutes and
+keeps it for `NINJA_ACTIVITY_RETENTION_DAYS` (default 2 years). No changes to
+the PowerShell scripts are needed — device, technician (`userId`), step
+(`START_REQUESTED` → `COMPLETED`) and `activityResult` all come from NinjaOne.
+The search UI lives in aiassessment under `/ops`.
+
+First check what NinjaOne actually returns for your tenant:
+```
+python3 collect_ninja_activity.py --dry-run --verbose
+```
+Look at `script_name`, `user_name` and `message` in the printed rows. If
+`script_name` is blank for your ad-hoc runs, adjust `script_name_for()`.
 
 ## Known open items
 
