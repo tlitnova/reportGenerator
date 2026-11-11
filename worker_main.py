@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 import db
 from collect_sophos_web import harvest_all as harvest_web_events
+import collect_ninja_activity
 from run_monthly import run_for_month
 
 REPORT_DAY_DEFAULT = int(os.environ.get("REPORT_DAY_DEFAULT", "29"))
@@ -40,6 +41,16 @@ TZ = ZoneInfo(os.environ.get("REPORT_TIMEZONE", "America/New_York"))
 # last one ended (de-duplicated by event id) gives full coverage.
 WEB_HARVEST_HOURS = float(os.environ.get("WEB_HARVEST_HOURS", "12"))
 _last_web_harvest = None
+# NinjaOne activity history (script runs). Incremental by activity id, so the
+# cadence only controls freshness, not completeness.
+NINJA_ACTIVITY_MINUTES = float(os.environ.get("NINJA_ACTIVITY_HARVEST_MINUTES", "15"))
+NINJA_ACTIVITY_ENABLED = os.environ.get("NINJA_ACTIVITY_ENABLED", "true").lower() not in ("0", "false", "no")
+_last_ninja_harvest = None
+_last_ninja_purge = None
+# The loop wakes at the faster of the two cadences; the monthly-report check
+# still only runs every POLL_SECONDS.
+TICK_SECONDS = int(min(POLL_SECONDS, NINJA_ACTIVITY_MINUTES * 60)) if NINJA_ACTIVITY_ENABLED else POLL_SECONDS
+_last_monthly_check = None
 
 
 def target_day_for(month: int) -> int:
@@ -74,12 +85,43 @@ def maybe_harvest_web(now, force=False):
     _last_web_harvest = now
 
 
+def maybe_harvest_ninja_activity(now):
+    """Copy new NinjaOne script/automation activities into Postgres every
+    NINJA_ACTIVITY_MINUTES, and apply retention once a day. Never raises."""
+    global _last_ninja_harvest, _last_ninja_purge
+    if not NINJA_ACTIVITY_ENABLED:
+        return
+    if _last_ninja_harvest and (now - _last_ninja_harvest).total_seconds() < NINJA_ACTIVITY_MINUTES * 60:
+        return
+    try:
+        collect_ninja_activity.harvest_all()
+    except Exception:
+        print("[worker] ERROR during NinjaOne activity harvest:")
+        traceback.print_exc()
+    _last_ninja_harvest = now
+    if _last_ninja_purge is None or (now - _last_ninja_purge).total_seconds() >= 86400:
+        try:
+            n = db.purge_ninja_activities(collect_ninja_activity.RETENTION_DAYS)
+            print(f"[worker] purged {n} NinjaOne activities older than {collect_ninja_activity.RETENTION_DAYS} days")
+        except Exception:
+            traceback.print_exc()
+        _last_ninja_purge = now
+
+
 def main_loop():
     print(f"[worker] starting. Report days: day>={REPORT_DAY_DEFAULT} (Feb: day>={REPORT_DAY_FEBRUARY}), "
-          f"timezone={TZ}, poll every {POLL_SECONDS}s.")
+          f"timezone={TZ}, report check every {POLL_SECONDS}s, "
+          f"NinjaOne activity harvest {'every %smin' % NINJA_ACTIVITY_MINUTES if NINJA_ACTIVITY_ENABLED else 'disabled'}.")
     db.init_db()
 
+    global _last_monthly_check
     while True:
+        now = datetime.now(TZ)
+        maybe_harvest_ninja_activity(now)
+        if _last_monthly_check and (now - _last_monthly_check).total_seconds() < POLL_SECONDS:
+            time.sleep(TICK_SECONDS)
+            continue
+        _last_monthly_check = now
         try:
             now = datetime.now(TZ)
             # Report on the month in progress (e.g. the Sep 29 run covers
@@ -104,7 +146,7 @@ def main_loop():
             print("[worker] ERROR during scheduling loop iteration:")
             traceback.print_exc()
 
-        time.sleep(POLL_SECONDS)
+        time.sleep(TICK_SECONDS)
 
 
 if __name__ == "__main__":
